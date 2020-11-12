@@ -30,7 +30,8 @@ def config_gen(config_file):
 config = config_gen("config.json")
 
 discord_client = discord.Client()
-logger = logging.getLogger(__name__)
+
+logging.basicConfig(level=logging.INFO)
 
 
 @discord_client.event
@@ -94,14 +95,21 @@ async def create_matrix_client():
     username = config["username"]
     password = config["password"]
 
+    timeout = 30000
+
     global matrix_client
 
     matrix_client = nio.AsyncClient(homeserver, username)
-    matrix_client.add_event_callback(message_callback, nio.RoomMessageText)
-
     print(await matrix_client.login(password))
 
-    await matrix_client.sync_forever(timeout=30000)
+    # Sync once before adding callback to avoid acting on old messages
+    await matrix_client.sync(timeout)
+
+    matrix_client.add_event_callback(message_callback, nio.RoomMessageText)
+
+    # Sync forever
+    await matrix_client.sync_forever(timeout=timeout)
+
     await matrix_client.close()
 
 
@@ -121,12 +129,11 @@ async def message_callback(room, event):
     if not message:
         return
 
-    print(
-        f"Bot message received for room {room.display_name} | "
-        f"{room.user_name(event.sender)}: {message}"
-        )
+    # Don't reply to ourselves
+    if event.sender == matrix_client.user:
+        return
 
-    # await webhook_send(event.sender, message)
+    await webhook_send(event.sender, message)
 
 
 def main():
@@ -134,4 +141,5 @@ def main():
     discord_client.run(config["token"])
 
 
-main()
+if __name__ == "__main__":
+    main()

@@ -1,9 +1,8 @@
-import asyncio
 import logging
 import json
 import os
+import nio
 import discord
-from nio import AsyncClient, MatrixRoom, RoomMessageText
 
 
 def config_gen(config_file):
@@ -31,31 +30,61 @@ def config_gen(config_file):
 config = config_gen("config.json")
 
 discord_client = discord.Client()
-logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 @discord_client.event
 async def on_ready():
     print(f"Logged in as {discord_client.user}")
-    await asyncio.create_task(create_matrix_client())
+
+    # Start Matrix bot
+    await create_matrix_client()
 
 
 @discord_client.event
 async def on_message(message):
+    # Don't respond to bots/webhooks
     if message.author.bot:
         return
 
+    message_ = f"<{message.author}> {message.content}"
+
+    if str(message.channel.id) == config["channel_id"]:
+        await message_send(message_)
+
+
+async def emote(message):
+    # Extract emotes from message
+    emote_list = []
+    for item in message.split():
+        if item[0] == item[-1] == ":":
+            emote_list.append(item[1:-1])
+
+    # Replace emotes with IDs
+    for emote in emote_list:
+        emote = discord.utils.get(discord_client.emojis, name=emote)
+        if emote is not None:
+            emote = str(emote)
+            replace_emote = emote.split(":")[1]
+            message = message.replace(f":{replace_emote}:", emote)
+
+    return message
+
 
 async def webhook_send(author, message):
-    hook_name = "matrix_bridge"
-
+    # Get Discord channel from channel ID
     channel = int(config["channel_id"])
     channel = discord_client.get_channel(channel)
 
+    # Create webhook if it doesn't exist
+    hook_name = "matrix_bridge"
     hooks = await channel.webhooks()
     hook = discord.utils.get(hooks, name=hook_name)
     if hook is None:
         hook = await channel.create_webhook(name=hook_name)
+
+    # Replace emote names
+    message = await emote(message)
 
     await hook.send(content=message, username=author)
 
@@ -65,23 +94,44 @@ async def create_matrix_client():
     username = config["username"]
     password = config["password"]
 
-    client = AsyncClient(homeserver, username)
-    print(await client.login(password))
+    global matrix_client
 
-    client.add_event_callback(message_callback, RoomMessageText)
-    await client.sync_forever(timeout=30000)
+    matrix_client = nio.AsyncClient(homeserver, username)
+    matrix_client.add_event_callback(message_callback, nio.RoomMessageText)
+
+    print(await matrix_client.login(password))
+
+    await matrix_client.sync_forever(timeout=30000)
+    await matrix_client.close()
 
 
-async def message_callback(room: MatrixRoom, event: RoomMessageText):
-    if room.room_id == config["room_id"]:
-        author = room.user_name(event.sender)
-        message = event.body
-        await webhook_send(author, message)
+async def message_send(message):
+    await matrix_client.room_send(
+        room_id=config["room_id"],
+        message_type="m.room.message",
+        content={
+            "msgtype": "m.text",
+            "body": message
+        }
+    )
+
+
+async def message_callback(room, event):
+    message = event.formatted_body or event.body
+    if not message:
+        return
+
+    print(
+        f"Bot message received for room {room.display_name} | "
+        f"{room.user_name(event.sender)}: {message}"
+        )
+
+    # await webhook_send(event.sender, message)
 
 
 def main():
+    # Start Discord bot
     discord_client.run(config["token"])
 
 
-if __name__ == "__main__":
-    main()
+main()

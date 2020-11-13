@@ -48,26 +48,50 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    message_ = f"<{message.author.name}> {message.content}"
+    # Replace IDs in mentions with the tagged user's name
+    content = await process(message.content, "emote_")
+    content = await process(content, "mention")
+
+    message_ = f"<{message.author.name}> {content}"
 
     if str(message.channel.id) == config["channel_id"]:
         await message_send(message_)
 
 
-async def emote(message):
-    # Extract emotes from message
-    emote_list = []
-    for item in message.split():
-        if item[0] == item[-1] == ":":
-            emote_list.append(item[1:-1])
+async def process(message, category):
+    # Replace emote names with emote IDs (Matrix -> Discord)
+    if category == "emote":
+        start = end = ":"
+        start_ = 1
 
-    # Replace emotes with IDs
-    for emote in emote_list:
-        emote = discord.utils.get(discord_client.emojis, name=emote)
-        if emote is not None:
-            emote = str(emote)
-            replace_emote = emote.split(":")[1]
-            message = message.replace(f":{replace_emote}:", emote)
+    # Replace emote IDs with emote names (Discord -> Matrix)
+    elif category == "emote_":
+        start = "<:"
+        start_ = 2
+        end = ">"
+
+    # Replace mentioned user IDs with names (Discord -> Matrix)
+    elif category == "mention":
+        start = "<@!"
+        start_ = 3
+        end = ">"
+
+    for item in message.split():
+        if item.startswith(start) and item.endswith(end):
+            item_ = item[start_:-1]
+
+            if category == "emote":
+                emote = discord.utils.get(discord_client.emojis, name=item_)
+                if emote is not None:
+                    message = message.replace(item, str(emote))
+
+            elif category == "emote_":
+                emote_name = item_.split(":")[0]
+                message = message.replace(item, f":{emote_name}:")
+
+            elif category == "mention":
+                user = discord_client.get_user(int(item_))
+                message = message.replace(item, f"@{user.name}")
 
     return message
 
@@ -85,7 +109,7 @@ async def webhook_send(author, avatar, message):
         hook = await channel.create_webhook(name=hook_name)
 
     # Replace emote names
-    message = await emote(message)
+    message = await process(message, "emote")
 
     await hook.send(username=author, avatar_url=avatar, content=message)
 
@@ -110,6 +134,7 @@ async def create_matrix_client():
     # Sync forever
     await matrix_client.sync_forever(timeout=timeout)
 
+    await matrix_client.logout()
     await matrix_client.close()
 
 
@@ -125,7 +150,8 @@ async def message_send(message):
 
 
 async def message_callback(room, event):
-    message = event.formatted_body or event.body
+    message = event.body
+
     if not message:
         return
 
@@ -144,7 +170,7 @@ async def message_callback(room, event):
 
                 avatar = user.avatar_url.split("/")[-1]
                 avatar = "https://matrix.org/_matrix/media/r0/download/" \
-                         + f"{homeserver}/{avatar}"
+                         f"{homeserver}/{avatar}"
                 break
 
     await webhook_send(author, avatar, message)

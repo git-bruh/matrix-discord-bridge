@@ -48,7 +48,7 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    message_ = f"<{message.author}> {message.content}"
+    message_ = f"<{message.author.name}> {message.content}"
 
     if str(message.channel.id) == config["channel_id"]:
         await message_send(message_)
@@ -72,7 +72,7 @@ async def emote(message):
     return message
 
 
-async def webhook_send(author, message):
+async def webhook_send(author, avatar, message):
     # Get Discord channel from channel ID
     channel = int(config["channel_id"])
     channel = discord_client.get_channel(channel)
@@ -87,7 +87,7 @@ async def webhook_send(author, message):
     # Replace emote names
     message = await emote(message)
 
-    await hook.send(content=message, username=author)
+    await hook.send(username=author, avatar_url=avatar, content=message)
 
 
 async def create_matrix_client():
@@ -133,7 +133,21 @@ async def message_callback(room, event):
     if event.sender == matrix_client.user:
         return
 
-    await webhook_send(event.sender, message)
+    author = event.sender[1:]
+    avatar = None
+
+    # Get avatar
+    for user in room.users.values():
+        if user.user_id == event.sender:
+            if user.avatar_url:
+                homeserver = author.split(":")[-1]
+
+                avatar = user.avatar_url.split("/")[-1]
+                avatar = "https://matrix.org/_matrix/media/r0/download/" \
+                         + f"{homeserver}/{avatar}"
+                break
+
+    await webhook_send(author, avatar, message)
 
 
 def main():

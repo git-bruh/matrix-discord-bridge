@@ -15,4 +15,4 @@ A simple Matrix-Discord bridge written in Python.
 ## What Works
 
 - [x] Sending messages
-- [x] Discord webhooks
+- [x] Discord webhooks (with avatars)

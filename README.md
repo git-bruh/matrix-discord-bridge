@@ -16,3 +16,4 @@ A simple Matrix-Discord bridge written in Python.
 
 - [x] Sending messages
 - [x] Discord webhooks (with avatars)
+- [x] Attachments (URL)

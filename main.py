@@ -48,14 +48,18 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    # Replace IDs in mentions with the tagged user's name
+    # Replace mention/emote IDs with names
     content = await process(message.content, "emote_")
     content = await process(content, "mention")
 
-    message_ = f"<{message.author.name}> {content}"
+    content = f"<{message.author.name}> {content}"
+
+    # Append attachments to message
+    for attachment in message.attachments:
+        content += f"\n{attachment.url}"
 
     if str(message.channel.id) == config["channel_id"]:
-        await message_send(message_)
+        await message_send(content)
 
 
 async def process(message, category):
@@ -129,7 +133,8 @@ async def create_matrix_client():
     # Sync once before adding callback to avoid acting on old messages
     await matrix_client.sync(timeout)
 
-    matrix_client.add_event_callback(message_callback, nio.RoomMessageText)
+    matrix_client.add_event_callback(message_callback, (nio.RoomMessageText,
+                                                        nio.RoomMessageMedia))
 
     # Sync forever
     await matrix_client.sync_forever(timeout=timeout)
@@ -162,15 +167,22 @@ async def message_callback(room, event):
     author = event.sender[1:]
     avatar = None
 
+    homeserver = author.split(":")[-1]
+    url = "https://matrix.org/_matrix/media/r0/download"
+
+    # Get attachments
+    try:
+        attachment = event.url.split("/")[-1]
+        message += f"\n{url}/{homeserver}/{attachment}"
+    except AttributeError:
+        pass
+
     # Get avatar
     for user in room.users.values():
         if user.user_id == event.sender:
             if user.avatar_url:
-                homeserver = author.split(":")[-1]
-
                 avatar = user.avatar_url.split("/")[-1]
-                avatar = "https://matrix.org/_matrix/media/r0/download/" \
-                         f"{homeserver}/{avatar}"
+                avatar = f"{url}/{homeserver}/{avatar}"
                 break
 
     await webhook_send(author, avatar, message)

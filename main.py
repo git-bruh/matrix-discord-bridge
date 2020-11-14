@@ -225,6 +225,9 @@ async def message_callback(room, event):
 
     # Get attachments
     try:
+        # Highlight attachment name
+        message = f"`{message}`"
+
         attachment = event.url.split("/")[-1]
         message += f"\n{url}/{homeserver}/{attachment}"
     except AttributeError:

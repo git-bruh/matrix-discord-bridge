@@ -1,8 +1,8 @@
-import logging
-import json
-import os
-import nio
 import discord
+import json
+import logging
+import nio
+import os
 
 
 def config_gen(config_file):
@@ -225,10 +225,11 @@ async def message_callback(room, event):
 
     # Get attachments
     try:
+        attachment = event.url.split("/")[-1]
+
         # Highlight attachment name
         message = f"`{message}`"
 
-        attachment = event.url.split("/")[-1]
         message += f"\n{url}/{homeserver}/{attachment}"
     except AttributeError:
         pass

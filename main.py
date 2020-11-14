@@ -51,7 +51,7 @@ async def on_message(message):
 
     # Replace mention/emote IDs with names
     content = await process(message.content, "emote_")
-    content = await process(content, "mention")
+    content = await process(content, "mention_")
 
     content = f"<{message.author.name}> {content}"
 
@@ -95,8 +95,17 @@ async def process(message, category):
         start_ = 2
         end = ">"
 
-    # Replace mentioned user IDs with names (Discord -> Matrix)
+    # Replace mentioned user names with IDs (Matrix -> Discord)
     elif category == "mention":
+        channel = await get_channel()
+        guild = channel.guild
+
+        start = "@"
+        start_ = 0
+        end = ""
+
+    # Replace mentioned user IDs with names (Discord -> Matrix)
+    elif category == "mention_":
         start = "<@!"
         start_ = 3
         end = ">"
@@ -115,6 +124,12 @@ async def process(message, category):
                 message = message.replace(item, f":{emote_name}:")
 
             elif category == "mention":
+                user = item[1:]
+
+                for member in await guild.query_members(query=user):
+                    message = message.replace(item, member.mention)
+
+            elif category == "mention_":
                 user = discord_client.get_user(int(item_))
                 message = message.replace(item, f"@{user.name}")
 
@@ -135,22 +150,6 @@ async def webhook_send(author, avatar, message):
     message = await process(message, "emote")
 
     await hook.send(username=author, avatar_url=avatar, content=message)
-
-
-async def partial_mention(user):
-    channel = await get_channel()
-
-    # Get guild to parse member list
-    guild = channel.guild
-
-    # Remove "@"
-    user = user[1:]
-
-    for member in await guild.query_members(query=user):
-        user_mention = f"<@!{member.id}>"
-        return user_mention
-
-    return None
 
 
 async def create_matrix_client():
@@ -216,12 +215,7 @@ async def message_callback(room, event):
     message = message.replace("@here", "@\u200Bhere")
 
     # Replace partial mention of Discord user with ID
-    if message.startswith("@"):
-        user = message.split()[0]
-        user_mention = await partial_mention(user)
-
-        if user_mention is not None:
-            message = message.replace(user, user_mention)
+    message = await process(message, "mention")
 
     # Get attachments
     try:

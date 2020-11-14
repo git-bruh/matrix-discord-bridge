@@ -67,6 +67,17 @@ async def on_message(message):
         await message_send(content)
 
 
+@discord_client.event
+async def on_typing(channel, user, when):
+    # Don't act on bots
+    if user.bot:
+        return
+
+    if channel == channel_:
+        # Send typing event
+        await matrix_client.room_typing(config["room_id"], timeout=0)
+
+
 async def process(message, category):
     # Replace emote names with emote IDs (Matrix -> Discord)
     if category == "emote":
@@ -151,6 +162,8 @@ async def create_matrix_client():
     matrix_client.add_event_callback(message_callback, (nio.RoomMessageText,
                                                         nio.RoomMessageMedia))
 
+    matrix_client.add_ephemeral_callback(typing_callback, nio.EphemeralEvent)
+
     # Sync forever
     await matrix_client.sync_forever(timeout=timeout)
 
@@ -170,6 +183,10 @@ async def message_send(message):
 
 
 async def message_callback(room, event):
+    # Don't act on activities in other rooms
+    if room.room_id != config["room_id"]:
+        return
+
     message = event.body
 
     if not message:
@@ -213,6 +230,22 @@ async def message_callback(room, event):
                 break
 
     await webhook_send(author, avatar, message)
+
+
+async def typing_callback(room, event):
+    # Don't act on activities in other rooms
+    if room.room_id != config["room_id"]:
+        return
+
+    if room.typing_users:
+        # Don't act on ourselves
+        if len(room.typing_users) == 1 \
+                and room.typing_users[0] == matrix_client.user:
+            return
+
+        # Send typing event
+        async with channel_.typing():
+            pass
 
 
 def main():

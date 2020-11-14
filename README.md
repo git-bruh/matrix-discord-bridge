@@ -1,6 +1,6 @@
 # matrix-discord-bridge
 
-A simple Matrix-Discord bridge written in Python.
+A simple bridge between Matrix and Discord written in Python.
 
 ## Installation
 
@@ -19,3 +19,4 @@ NOTE: [Privileged Intents](https://discordpy.readthedocs.io/en/latest/intents.ht
 - [x] Sending messages
 - [x] Discord webhooks (with avatars)
 - [x] Attachments (URL)
+- [x] Typing status

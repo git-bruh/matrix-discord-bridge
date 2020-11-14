@@ -12,6 +12,8 @@ A simple Matrix-Discord bridge written in Python.
 
 * Edit `config.json`
 
+NOTE: [Privileged Intents](https://discordpy.readthedocs.io/en/latest/intents.html) must be enabled for your Discord bot.
+
 ## What Works
 
 - [x] Sending messages

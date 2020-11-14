@@ -29,8 +29,9 @@ def config_gen(config_file):
 
 config = config_gen("config.json")
 
-discord_client = discord.Client()
-
+intents = discord.Intents.default()
+intents.members = True
+discord_client = discord.Client(intents=intents)
 logging.basicConfig(level=logging.INFO)
 
 
@@ -118,6 +119,24 @@ async def webhook_send(author, avatar, message):
     await hook.send(username=author, avatar_url=avatar, content=message)
 
 
+async def partial_mention(user):
+    # Get Discord channel from channel ID
+    channel = int(config["channel_id"])
+    channel = discord_client.get_channel(channel)
+
+    # Get guild to parse member list
+    guild = channel.guild
+
+    # Remove "@"
+    user = user[1:]
+
+    for member in await guild.query_members(query=user):
+        user_mention = f"<@!{member.id}>"
+        return user_mention
+
+    return None
+
+
 async def create_matrix_client():
     homeserver = config["homeserver"]
     username = config["username"]
@@ -169,6 +188,14 @@ async def message_callback(room, event):
 
     homeserver = author.split(":")[-1]
     url = "https://matrix.org/_matrix/media/r0/download"
+
+    # Replace partial mention of Discord user with ID
+    if message.startswith("@"):
+        user = message.split()[0]
+        user_mention = await partial_mention(user)
+
+        if user_mention is not None:
+            message = message.replace(user, user_mention)
 
     # Get attachments
     try:

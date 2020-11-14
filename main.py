@@ -39,10 +39,6 @@ logging.basicConfig(level=logging.INFO)
 async def on_ready():
     print(f"Logged in as {discord_client.user}")
 
-    global channel_
-    channel_ = int(config["channel_id"])
-    channel_ = discord_client.get_channel(channel_)
-
     # Start Matrix bot
     await create_matrix_client()
 
@@ -69,6 +65,8 @@ async def on_message(message):
 
 @discord_client.event
 async def on_typing(channel, user, when):
+    channel_ = await get_channel()
+
     # Don't act on bots
     if user.bot:
         return
@@ -76,6 +74,13 @@ async def on_typing(channel, user, when):
     if channel == channel_:
         # Send typing event
         await matrix_client.room_typing(config["room_id"], timeout=0)
+
+
+async def get_channel():
+    channel = int(config["channel_id"])
+    channel = discord_client.get_channel(channel)
+
+    return channel
 
 
 async def process(message, category):
@@ -117,12 +122,14 @@ async def process(message, category):
 
 
 async def webhook_send(author, avatar, message):
+    channel = await get_channel()
+
     # Create webhook if it doesn't exist
     hook_name = "matrix_bridge"
-    hooks = await channel_.webhooks()
+    hooks = await channel.webhooks()
     hook = discord.utils.get(hooks, name=hook_name)
     if hook is None:
-        hook = await channel_.create_webhook(name=hook_name)
+        hook = await channel.create_webhook(name=hook_name)
 
     # Replace emote names
     message = await process(message, "emote")
@@ -131,8 +138,10 @@ async def webhook_send(author, avatar, message):
 
 
 async def partial_mention(user):
+    channel = await get_channel()
+
     # Get guild to parse member list
-    guild = channel_.guild
+    guild = channel.guild
 
     # Remove "@"
     user = user[1:]
@@ -233,6 +242,8 @@ async def message_callback(room, event):
 
 
 async def typing_callback(room, event):
+    channel = await get_channel()
+
     # Don't act on activities in other rooms
     if room.room_id != config["room_id"]:
         return
@@ -244,7 +255,7 @@ async def typing_callback(room, event):
             return
 
         # Send typing event
-        async with channel_.typing():
+        async with channel.typing():
             pass
 
 

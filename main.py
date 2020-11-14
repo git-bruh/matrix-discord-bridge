@@ -39,6 +39,10 @@ logging.basicConfig(level=logging.INFO)
 async def on_ready():
     print(f"Logged in as {discord_client.user}")
 
+    global channel_
+    channel_ = int(config["channel_id"])
+    channel_ = discord_client.get_channel(channel_)
+
     # Start Matrix bot
     await create_matrix_client()
 
@@ -102,16 +106,12 @@ async def process(message, category):
 
 
 async def webhook_send(author, avatar, message):
-    # Get Discord channel from channel ID
-    channel = int(config["channel_id"])
-    channel = discord_client.get_channel(channel)
-
     # Create webhook if it doesn't exist
     hook_name = "matrix_bridge"
-    hooks = await channel.webhooks()
+    hooks = await channel_.webhooks()
     hook = discord.utils.get(hooks, name=hook_name)
     if hook is None:
-        hook = await channel.create_webhook(name=hook_name)
+        hook = await channel_.create_webhook(name=hook_name)
 
     # Replace emote names
     message = await process(message, "emote")
@@ -120,12 +120,8 @@ async def webhook_send(author, avatar, message):
 
 
 async def partial_mention(user):
-    # Get Discord channel from channel ID
-    channel = int(config["channel_id"])
-    channel = discord_client.get_channel(channel)
-
     # Get guild to parse member list
-    guild = channel.guild
+    guild = channel_.guild
 
     # Remove "@"
     user = user[1:]
@@ -188,6 +184,10 @@ async def message_callback(room, event):
 
     homeserver = author.split(":")[-1]
     url = "https://matrix.org/_matrix/media/r0/download"
+
+    # Don't mention @everyone or @here
+    message = message.replace("@everyone", "@\u200Beveryone")
+    message = message.replace("@here", "@\u200Bhere")
 
     # Replace partial mention of Discord user with ID
     if message.startswith("@"):

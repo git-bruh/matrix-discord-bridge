@@ -35,6 +35,10 @@ discord_client = discord.Client(intents=intents)
 logging.basicConfig(level=logging.INFO)
 
 
+deletion_queue = []
+message_cache = {}
+
+
 @discord_client.event
 async def on_ready():
     print(f"Logged in as {discord_client.user}")
@@ -49,6 +53,12 @@ async def on_message(message):
     if message.author.bot:
         return
 
+    # Delete redacted messages
+    for webhook_message in deletion_queue:
+        message_ = message_cache[webhook_message]
+        await message_.delete()
+        deletion_queue.remove(webhook_message)
+
     # Replace mention/emote IDs with names
     content = await process(message.content, "emote_")
     content = await process(content, "mention_")
@@ -61,6 +71,11 @@ async def on_message(message):
 
     if str(message.channel.id) == config["channel_id"]:
         await message_send(content)
+
+
+@discord_client.event
+async def on_message_delete(message):
+    pass
 
 
 @discord_client.event
@@ -136,7 +151,7 @@ async def process(message, category):
     return message
 
 
-async def webhook_send(author, avatar, message):
+async def webhook_send(author, avatar, message, event_id):
     channel = await get_channel()
 
     # Create webhook if it doesn't exist
@@ -149,7 +164,11 @@ async def webhook_send(author, avatar, message):
     # Replace emote names
     message = await process(message, "emote")
 
-    await hook.send(username=author, avatar_url=avatar, content=message)
+    # 'wait=True' allows us to store the sent message
+    hook = await hook.send(username=author, avatar_url=avatar, content=message,
+                           wait=True)
+
+    message_cache[event_id] = hook
 
 
 async def create_matrix_client():
@@ -169,6 +188,8 @@ async def create_matrix_client():
 
     matrix_client.add_event_callback(message_callback, (nio.RoomMessageText,
                                                         nio.RoomMessageMedia))
+
+    matrix_client.add_event_callback(redaction_callback, nio.RedactionEvent)
 
     matrix_client.add_ephemeral_callback(typing_callback, nio.EphemeralEvent)
 
@@ -200,7 +221,7 @@ async def message_callback(room, event):
     if not message:
         return
 
-    # Don't reply to ourselves
+    # Don't act on ourselves
     if event.sender == matrix_client.user:
         return
 
@@ -236,7 +257,19 @@ async def message_callback(room, event):
                 avatar = f"{url}/{homeserver}/{avatar}"
                 break
 
-    await webhook_send(author, avatar, message)
+    await webhook_send(author, avatar, message, event.event_id)
+
+
+async def redaction_callback(room, event):
+    # Don't act on activities in other rooms
+    if room.room_id != config["room_id"]:
+        return
+
+    # Don't act on ourselves
+    if event.sender == matrix_client.user:
+        return
+
+    deletion_queue.append(event.redacts)
 
 
 async def typing_callback(room, event):

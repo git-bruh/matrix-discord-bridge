@@ -59,9 +59,8 @@ async def on_message(message):
         await message_.delete()
         deletion_queue.remove(webhook_message)
 
-    # Replace mention/emote IDs with names
-    content = await process(message.content, "emote_")
-    content = await process(content, "mention_")
+    # Replace Discord IDs with mentions and emotes
+    content = await process_discord(message.content)
 
     content = f"<{message.author.name}> {content}"
 
@@ -100,58 +99,55 @@ async def get_channel():
     return channel
 
 
-async def process(message, category):
-    # Replace emote names with emote IDs (Matrix -> Discord)
-    if category == "emote":
-        start = end = ":"
+async def process_discord(message):
+    emote_list = await process_split(message, "<:", ">")
+    mention_list = await process_split(message, "<@", ">")
 
-    # Replace emote IDs with emote names (Discord -> Matrix)
-    elif category == "emote_":
-        start = "<:"
-        end = ">"
+    for emote in emote_list:
+        emote_name = emote.split(":")[1]
+        message = message.replace(emote, f":{emote_name}:")
 
-    # Replace mentioned user names with IDs (Matrix -> Discord)
-    elif category == "mention":
-        channel = await get_channel()
-        guild = channel.guild
+    for mention in mention_list:
+        # Discord mentions can start with either "<@" or "<@!"
+        try:
+            mention_ = int(mention[2:-1])
+        except ValueError:
+            mention_ = int(mention[3:-1])
 
-        start = "@"
-        end = ""
+        user = discord_client.get_user(mention_)
+        message = message.replace(mention, f"{user.name}")
 
-    # Replace mentioned user IDs with names (Discord -> Matrix)
-    elif category == "mention_":
-        start = "<@"
-        end = ">"
+    return message
+
+
+async def process_matrix(message):
+    emote_list = await process_split(message, ":", ":")
+    mention_list = await process_split(message, "@", "")
+
+    for emote in emote_list:
+        emote_ = discord.utils.get(discord_client.emojis, name=emote[1:-1])
+
+        if emote_:
+            message = message.replace(emote, str(emote_))
+
+    channel = await get_channel()
+    guild = channel.guild
+
+    for mention in mention_list:
+        for member in await guild.query_members(query=mention[1:]):
+            message = message.replace(mention, member.mention)
+
+    return message
+
+
+async def process_split(message, start, end):
+    return_list = []
 
     for item in message.split():
         if item.startswith(start) and item.endswith(end):
-            item_ = item[len(start):-1]
+            return_list.append(item)
 
-            if category == "emote":
-                emote = discord.utils.get(discord_client.emojis, name=item_)
-                if emote is not None:
-                    message = message.replace(item, str(emote))
-
-            elif category == "emote_":
-                emote_name = item_.split(":")[0]
-                message = message.replace(item, f":{emote_name}:")
-
-            elif category == "mention":
-                user = item[1:]
-
-                for member in await guild.query_members(query=user):
-                    message = message.replace(item, member.mention)
-
-            elif category == "mention_":
-                try:
-                    item_ = int(item_)
-                except ValueError:
-                    item_ = int(item[3:-1])
-
-                user = discord_client.get_user(item_)
-                message = message.replace(item, f"@{user.name}")
-
-    return message
+    return return_list
 
 
 async def webhook_send(author, avatar, message, event_id):
@@ -163,9 +159,6 @@ async def webhook_send(author, avatar, message, event_id):
     hook = discord.utils.get(hooks, name=hook_name)
     if hook is None:
         hook = await channel.create_webhook(name=hook_name)
-
-    # Replace emote names
-    message = await process(message, "emote")
 
     # 'wait=True' allows us to store the sent message
     hook = await hook.send(username=author, avatar_url=avatar, content=message,
@@ -248,8 +241,8 @@ async def message_callback(room, event):
     message = message.replace("@everyone", "@\u200Beveryone")
     message = message.replace("@here", "@\u200Bhere")
 
-    # Replace partial mention of Discord user with ID
-    message = await process(message, "mention")
+    # Replace Discord mentions and emotes with IDs
+    message = await process_matrix(message)
 
     # Get attachments
     try:

@@ -20,3 +20,4 @@ NOTE: [Privileged Intents](https://discordpy.readthedocs.io/en/latest/intents.ht
 - [x] Discord webhooks (with avatars)
 - [x] Attachments (URL)
 - [x] Typing status
+- [x] Redacting messages

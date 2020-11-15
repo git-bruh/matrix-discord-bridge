@@ -102,12 +102,10 @@ async def process(message, category):
     # Replace emote names with emote IDs (Matrix -> Discord)
     if category == "emote":
         start = end = ":"
-        start_ = 1
 
     # Replace emote IDs with emote names (Discord -> Matrix)
     elif category == "emote_":
         start = "<:"
-        start_ = 2
         end = ">"
 
     # Replace mentioned user names with IDs (Matrix -> Discord)
@@ -116,18 +114,16 @@ async def process(message, category):
         guild = channel.guild
 
         start = "@"
-        start_ = 0
         end = ""
 
     # Replace mentioned user IDs with names (Discord -> Matrix)
     elif category == "mention_":
-        start = "<@!"
-        start_ = 3
+        start = "<@"
         end = ">"
 
     for item in message.split():
         if item.startswith(start) and item.endswith(end):
-            item_ = item[start_:-1]
+            item_ = item[len(start):-1]
 
             if category == "emote":
                 emote = discord.utils.get(discord_client.emojis, name=item_)
@@ -145,7 +141,12 @@ async def process(message, category):
                     message = message.replace(item, member.mention)
 
             elif category == "mention_":
-                user = discord_client.get_user(int(item_))
+                try:
+                    item_ = int(item_)
+                except ValueError:
+                    item_ = int(item[3:-1])
+
+                user = discord_client.get_user(item_)
                 message = message.replace(item, f"@{user.name}")
 
     return message

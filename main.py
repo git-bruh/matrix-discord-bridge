@@ -70,12 +70,14 @@ async def on_message(message):
         content += f"\n{attachment.url}"
 
     if str(message.channel.id) == config["channel_id"]:
-        await message_send(content)
+        matrix_message = await message_send(content)
+        message_cache[message.id] = matrix_message
 
 
 @discord_client.event
 async def on_message_delete(message):
-    pass
+    if message.id in message_cache:
+        await message_redact(message_cache[message.id])
 
 
 @discord_client.event
@@ -202,13 +204,23 @@ async def create_matrix_client():
 
 
 async def message_send(message):
-    await matrix_client.room_send(
+    message = await matrix_client.room_send(
         room_id=config["room_id"],
         message_type="m.room.message",
         content={
             "msgtype": "m.text",
             "body": message
         }
+    )
+
+    return message.event_id
+
+
+async def message_redact(message):
+    await matrix_client.room_redact(
+        room_id=config["room_id"],
+        event_id=message,
+        reason="Message deleted"
     )
 
 

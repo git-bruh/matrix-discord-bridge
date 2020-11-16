@@ -47,39 +47,37 @@ async def on_ready():
 
 @discord_client.event
 async def on_message(message):
-    # Don't act on bots
-    if message.author.bot:
+    if message.author.bot or str(message.channel.id) != config["channel_id"]:
         return
 
-    if str(message.channel.id) != config["channel_id"]:
-        return
-
-    # Replace Discord IDs with mentions and emotes
-    content = await process_discord(message.content)
-
-    content = f"<{message.author.name}> {content}"
-
-    # Append attachments to message
-    for attachment in message.attachments:
-        content += f"\n{attachment.url}"
+    content = await process_discord(message)
 
     matrix_message = await message_send(content)
     message_cache[message.id] = matrix_message
 
 
 @discord_client.event
+async def on_message_edit(before, after):
+    if after.author.bot or str(after.channel.id) != config["channel_id"]:
+        return
+
+    content = await process_discord(after) + " (edited)"
+
+    await message_redact(message_cache[before.id], "Message edited")
+
+    matrix_message = await message_send(content)
+    message_cache[after.id] = matrix_message
+
+
+@discord_client.event
 async def on_message_delete(message):
     if message.id in message_cache:
-        await message_redact(message_cache[message.id])
+        await message_redact(message_cache[message.id], "Message deleted")
 
 
 @discord_client.event
 async def on_typing(channel, user, when):
-    # Don't act on bots
-    if user.bot:
-        return
-
-    if str(channel.id) != config["channel_id"]:
+    if user.bot or str(channel.id) != config["channel_id"]:
         return
 
     # Send typing event
@@ -94,8 +92,10 @@ async def get_channel():
 
 
 async def process_discord(message):
-    emote_list = await process_split(message, "<:", ">")
-    mention_list = await process_split(message, "<@", ">")
+    content = message.content
+
+    emote_list = await process_split(content, "<:", ">")
+    mention_list = await process_split(content, "<@", ">")
 
     for emote in emote_list:
         emote_name = emote.split(":")[1]
@@ -109,12 +109,22 @@ async def process_discord(message):
             mention_ = int(mention[3:-1])
 
         user = discord_client.get_user(mention_)
-        message = message.replace(mention, f"@{user.name}")
+        content = content.replace(mention, f"@{user.name}")
 
-    return message
+    # Append attachments to message
+    for attachment in message.attachments:
+        content += f"\n{attachment.url}"
+
+    content = f"<{message.author.name}> {content}"
+
+    return content
 
 
 async def process_matrix(message):
+    # Don't mention @everyone or @here
+    message = message.replace("@everyone", "@\u200Beveryone")
+    message = message.replace("@here", "@\u200Bhere")
+
     emote_list = await process_split(message, ":", ":")
     mention_list = await process_split(message, "@", "")
 
@@ -203,11 +213,11 @@ async def message_send(message):
     return message.event_id
 
 
-async def message_redact(message):
+async def message_redact(message, reason):
     await matrix_client.room_redact(
         room_id=config["room_id"],
         event_id=message,
-        reason="Message deleted"
+        reason=reason
     )
 
 
@@ -230,10 +240,6 @@ async def message_callback(room, event):
 
     homeserver = author.split(":")[-1]
     url = "https://matrix.org/_matrix/media/r0/download"
-
-    # Don't mention @everyone or @here
-    message = message.replace("@everyone", "@\u200Beveryone")
-    message = message.replace("@here", "@\u200Bhere")
 
     # Replace Discord mentions and emotes with IDs
     message = await process_matrix(message)

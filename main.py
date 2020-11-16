@@ -47,8 +47,11 @@ async def on_ready():
 
 @discord_client.event
 async def on_message(message):
-    # Don't respond to bots/webhooks
+    # Don't act on bots
     if message.author.bot:
+        return
+
+    if str(message.channel.id) != config["channel_id"]:
         return
 
     # Replace Discord IDs with mentions and emotes
@@ -60,9 +63,8 @@ async def on_message(message):
     for attachment in message.attachments:
         content += f"\n{attachment.url}"
 
-    if str(message.channel.id) == config["channel_id"]:
-        matrix_message = await message_send(content)
-        message_cache[message.id] = matrix_message
+    matrix_message = await message_send(content)
+    message_cache[message.id] = matrix_message
 
 
 @discord_client.event
@@ -73,15 +75,15 @@ async def on_message_delete(message):
 
 @discord_client.event
 async def on_typing(channel, user, when):
-    channel_ = await get_channel()
-
     # Don't act on bots
     if user.bot:
         return
 
-    if channel == channel_:
-        # Send typing event
-        await matrix_client.room_typing(config["room_id"], timeout=0)
+    if str(channel.id) != config["channel_id"]:
+        return
+
+    # Send typing event
+    await matrix_client.room_typing(config["room_id"], timeout=0)
 
 
 async def get_channel():
@@ -107,7 +109,7 @@ async def process_discord(message):
             mention_ = int(mention[3:-1])
 
         user = discord_client.get_user(mention_)
-        message = message.replace(mention, f"{user.name}")
+        message = message.replace(mention, f"@{user.name}")
 
     return message
 

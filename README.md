@@ -12,7 +12,7 @@ A simple bridge between Matrix and Discord written in Python.
 
 * Edit `config.json`
 
-NOTE: [Privileged Intents](https://discordpy.readthedocs.io/en/latest/intents.html) must be enabled for your Discord bot.
+NOTE: [Privileged Intents](https://discordpy.readthedocs.io/en/latest/intents.html#privileged-intents) must be enabled for your Discord bot.
 
 ## What Works
 

@@ -34,8 +34,6 @@ intents.members = True
 discord_client = discord.Client(intents=intents)
 logging.basicConfig(level=logging.INFO)
 
-
-deletion_queue = []
 message_cache = {}
 
 
@@ -52,12 +50,6 @@ async def on_message(message):
     # Don't respond to bots/webhooks
     if message.author.bot:
         return
-
-    # Delete redacted messages
-    for webhook_message in deletion_queue:
-        message_ = message_cache[webhook_message]
-        await message_.delete()
-        deletion_queue.remove(webhook_message)
 
     # Replace Discord IDs with mentions and emotes
     content = await process_discord(message.content)
@@ -275,7 +267,12 @@ async def redaction_callback(room, event):
     if event.sender == matrix_client.user:
         return
 
-    deletion_queue.append(event.redacts)
+    # Redact webhook message
+    try:
+        message = message_cache[event.redacts]
+        await message.delete()
+    except KeyError:
+        pass
 
 
 async def typing_callback(room, event):

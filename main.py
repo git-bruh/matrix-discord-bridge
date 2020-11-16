@@ -99,7 +99,7 @@ async def process_discord(message):
 
     for emote in emote_list:
         emote_name = emote.split(":")[1]
-        message = message.replace(emote, f":{emote_name}:")
+        content = content.replace(emote, f":{emote_name}:")
 
     for mention in mention_list:
         # Discord mentions can start with either "<@" or "<@!"

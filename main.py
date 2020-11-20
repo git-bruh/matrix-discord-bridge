@@ -161,7 +161,7 @@ async def webhook_send(author, avatar, message, event_id):
     hook_name = "matrix_bridge"
     hooks = await channel.webhooks()
     hook = discord.utils.get(hooks, name=hook_name)
-    if hook is None:
+    if not hook:
         hook = await channel.create_webhook(name=hook_name)
 
     # 'wait=True' allows us to store the sent message

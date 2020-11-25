@@ -124,7 +124,7 @@ async def process_matrix(message):
                 message = message.replace(emote, str(emote_))
 
     for mention in mentions:
-        member =  await guild.query_members(query=mention[2])
+        member = await guild.query_members(query=mention[2])
         if member:
             message = message.replace(mention[1], member[0].mention)
 

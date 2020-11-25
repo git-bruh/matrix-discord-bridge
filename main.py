@@ -2,6 +2,7 @@ import discord
 import json
 import logging
 import nio
+import re
 import os
 
 
@@ -92,24 +93,10 @@ async def get_channel():
 
 
 async def process_discord(message):
-    content = message.content
+    content = message.clean_content
 
-    emote_list = await process_split(content, "<:", ">")
-    mention_list = await process_split(content, "<@", ">")
-
-    for emote in emote_list:
-        emote_name = emote.split(":")[1]
-        content = content.replace(emote, f":{emote_name}:")
-
-    for mention in mention_list:
-        # Discord mentions can start with either "<@" or "<@!"
-        try:
-            mention_ = int(mention[2:-1])
-        except ValueError:
-            mention_ = int(mention[3:-1])
-
-        user = discord_client.get_user(mention_)
-        content = content.replace(mention, f"@{user.name}")
+    # Replace emote IDs with names
+    content = re.sub(r"<a?(:\w+:)\d*>", r"\g<1>", content)
 
     # Append attachments to message
     for attachment in message.attachments:
@@ -125,33 +112,23 @@ async def process_matrix(message):
     message = message.replace("@everyone", "@\u200Beveryone")
     message = message.replace("@here", "@\u200Bhere")
 
-    emote_list = await process_split(message, ":", ":")
-    mention_list = await process_split(message, "@", "")
+    mention_list = re.findall(r"(^|\s)(@(\w*))", message)
 
-    for emote in emote_list:
-        emote_ = discord.utils.get(discord_client.emojis, name=emote[1:-1])
-
-        if emote_:
-            message = message.replace(emote, str(emote_))
+    for emote in message.split():
+        if emote[0] == emote[-1] == ":":
+            emote_ = discord.utils.get(discord_client.emojis, name=emote[1:-1])
+            if emote_:
+                message = message.replace(emote, str(emote_))
 
     channel = await get_channel()
     guild = channel.guild
 
     for mention in mention_list:
-        for member in await guild.query_members(query=mention[1:]):
-            message = message.replace(mention, member.mention)
+        member = guild.get_member_named(mention[2])
+        if member:
+            message = message.replace(mention[1], member.mention)
 
     return message
-
-
-async def process_split(message, start, end):
-    return_list = []
-
-    for item in message.split():
-        if item.startswith(start) and item.endswith(end):
-            return_list.append(item)
-
-    return return_list
 
 
 async def webhook_send(author, avatar, message, event_id):

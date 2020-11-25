@@ -112,21 +112,21 @@ async def process_matrix(message):
     message = message.replace("@everyone", "@\u200Beveryone")
     message = message.replace("@here", "@\u200Bhere")
 
-    mention_list = re.findall(r"(^|\s)(@(\w*))", message)
-
-    for emote in message.split():
-        if emote[0] == emote[-1] == ":":
-            emote_ = discord.utils.get(discord_client.emojis, name=emote[1:-1])
-            if emote_:
-                message = message.replace(emote, str(emote_))
+    mentions = re.findall(r"(^|\s)(@(\w*))", message)
 
     channel = await get_channel()
     guild = channel.guild
 
-    for mention in mention_list:
-        member = guild.get_member_named(mention[2])
+    for emote in message.split():
+        if emote[0] == emote[-1] == ":":
+            emote_ = discord.utils.get(guild.emojis, name=emote[1:-1])
+            if emote_:
+                message = message.replace(emote, str(emote_))
+
+    for mention in mentions:
+        member =  await guild.query_members(query=mention[2])
         if member:
-            message = message.replace(mention[1], member.mention)
+            message = message.replace(mention[1], member[0].mention)
 
     return message
 

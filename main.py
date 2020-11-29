@@ -97,6 +97,14 @@ async def get_channel():
 async def process_discord(message):
     content = message.clean_content
 
+    reply = message.reference
+    replied = ""
+    if reply:
+        replied_message = await message.channel.fetch_message(reply.message_id)
+        replied_content = replied_message.content
+        replied_author = replied_message.author.name
+        replied = f"Replying to {replied_author}: {replied_content}\n"
+
     # Replace emote IDs with names
     content = re.sub(r"<a?(:\w+:)\d*>", r"\g<1>", content)
 
@@ -104,7 +112,7 @@ async def process_discord(message):
     for attachment in message.attachments:
         content += f"\n{attachment.url}"
 
-    content = f"<{message.author.name}> {content}"
+    content = f"<{message.author.name}> {replied} {content}"
 
     return content
 

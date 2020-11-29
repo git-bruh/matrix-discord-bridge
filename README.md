@@ -22,3 +22,4 @@ NOTE: [Privileged Intents](https://discordpy.readthedocs.io/en/latest/intents.ht
 - [x] Typing status
 - [x] Redacting messages
 - [x] Editing messages (Partial)
+- [x] Replies

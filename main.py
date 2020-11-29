@@ -55,7 +55,7 @@ async def on_message(message):
 
     content = await process_discord(message)
 
-    matrix_message = await message_send(content)
+    matrix_message = await message_send(content[0], content[1])
     message_cache[message.id] = matrix_message
 
 
@@ -64,11 +64,11 @@ async def on_message_edit(before, after):
     if after.author.bot or str(after.channel.id) != config["channel_id"]:
         return
 
-    content = await process_discord(after) + " (edited)"
+    content = await process_discord(after)
 
     await message_redact(message_cache[before.id], "Message edited")
 
-    matrix_message = await message_send(content)
+    matrix_message = await message_send(f"{content[0]} (edited)")
     message_cache[after.id] = matrix_message
 
 
@@ -97,13 +97,14 @@ async def get_channel():
 async def process_discord(message):
     content = message.clean_content
 
-    reply = message.reference
-    replied = ""
-    if reply:
-        replied_message = await message.channel.fetch_message(reply.message_id)
-        replied_content = replied_message.content
-        replied_author = replied_message.author.name
-        replied = f"Replying to {replied_author}: {replied_content}\n"
+    replied_event = None
+    if message.reference:
+        replied_message = await message.channel.fetch_message(message.reference
+                                                              .message_id)
+        try:
+            replied_event = message_cache[replied_message.id]
+        except KeyError:
+            pass
 
     # Replace emote IDs with names
     content = re.sub(r"<a?(:\w+:)\d*>", r"\g<1>", content)
@@ -112,9 +113,9 @@ async def process_discord(message):
     for attachment in message.attachments:
         content += f"\n{attachment.url}"
 
-    content = f"<{message.author.name}> {replied} {content}"
+    content = f"<{message.author.name}> {content}"
 
-    return content
+    return content, replied_event
 
 
 async def process_matrix(message):
@@ -190,14 +191,21 @@ async def create_matrix_client():
     await matrix_client.close()
 
 
-async def message_send(message):
+async def message_send(message, reply_id=None):
+    content = {
+        "msgtype": "m.text",
+        "body": message,
+    }
+
+    if reply_id:
+        content["m.relates_to"] = {
+            "m.in_reply_to": {"event_id": reply_id},
+        }
+
     message = await matrix_client.room_send(
         room_id=config["room_id"],
         message_type="m.room.message",
-        content={
-            "msgtype": "m.text",
-            "body": message
-        }
+        content=content
     )
 
     return message.event_id

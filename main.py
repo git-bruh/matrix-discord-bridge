@@ -141,10 +141,13 @@ async def webhook_send(author, avatar, message, event_id):
         hook = await channel.create_webhook(name=hook_name)
 
     # 'wait=True' allows us to store the sent message
-    hook = await hook.send(username=author, avatar_url=avatar, content=message,
-                           wait=True)
-
-    message_cache[event_id] = hook
+    try:
+        hook = await hook.send(username=author, avatar_url=avatar,
+                               content=message, wait=True)
+        message_cache[event_id] = hook
+    except discord.errors.HTTPException:
+        logging.info(f"Failed to send message {event_id} "
+                     "longer than 2000 characters.")
 
 
 async def create_matrix_client():

@@ -30,6 +30,8 @@ def config_gen(config_file):
 
 config = config_gen("config.json")
 
+matrix_logger = logging.getLogger("matrix_logger")
+
 intents = discord.Intents.default()
 intents.members = True
 discord_client = discord.Client(intents=intents)
@@ -145,9 +147,8 @@ async def webhook_send(author, avatar, message, event_id):
         hook = await hook.send(username=author, avatar_url=avatar,
                                content=message, wait=True)
         message_cache[event_id] = hook
-    except discord.errors.HTTPException:
-        logging.info(f"Failed to send message {event_id} "
-                     "longer than 2000 characters.")
+    except discord.errors.HTTPException as e:
+        matrix_logger.warning(f"Failed to send message {event_id}: {e}")
 
 
 async def create_matrix_client():
@@ -160,9 +161,10 @@ async def create_matrix_client():
     global matrix_client
 
     matrix_client = nio.AsyncClient(homeserver, username)
-    print(await matrix_client.login(password))
+    matrix_logger.info(await matrix_client.login(password))
 
     # Sync once before adding callback to avoid acting on old messages
+    matrix_logger.info("Doing initial sync.")
     await matrix_client.sync(timeout)
 
     matrix_client.add_event_callback(message_callback, (nio.RoomMessageText,
@@ -173,6 +175,7 @@ async def create_matrix_client():
     matrix_client.add_ephemeral_callback(typing_callback, nio.EphemeralEvent)
 
     # Sync forever
+    matrix_logger.info("Syncing forever.")
     await matrix_client.sync_forever(timeout=timeout)
 
     await matrix_client.logout()

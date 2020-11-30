@@ -125,14 +125,19 @@ class MatrixClient(object):
 
 
 class DiscordClient(discord.Client):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        matrix_logger.info("Syncing forever.")
+        self.bg_task = self.loop.create_task(
+            matrix_client.sync_forever(timeout=30000))
+
     async def on_ready(self):
         print(f"Logged in as {self.user}")
 
         global channel
         channel = int(config["channel_id"])
         channel = self.get_channel(channel)
-        matrix_logger.info("Syncing forever.")
-        await matrix_client.sync_forever(timeout=30000)
 
     async def on_message(self, message):
         if message.author.bot or str(message.channel.id) != \

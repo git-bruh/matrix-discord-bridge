@@ -1,4 +1,3 @@
-import asyncio
 import discord
 import re
 import json
@@ -48,6 +47,7 @@ class MatrixClient(object):
         homeserver = config["homeserver"]
         username = config["username"]
         password = config["password"]
+        timeout = 30000
 
         global matrix_client
 
@@ -55,9 +55,8 @@ class MatrixClient(object):
 
         matrix_logger.info(await matrix_client.login(password))
 
-        # Sync once to avoid acting on old messages
         matrix_logger.info("Doing initial sync.")
-        await matrix_client.sync(30000)
+        await matrix_client.sync(timeout)
 
         # Set up event callbacks
         callbacks = Callbacks()
@@ -70,6 +69,11 @@ class MatrixClient(object):
 
         matrix_client.add_ephemeral_callback(
             callbacks.typing_callback, EphemeralEvent)
+
+        matrix_logger.info("Syncing forever.")
+        await matrix_client.sync_forever(timeout=timeout)
+
+        await matrix_client.close()
 
     async def message_send(self, message, reply_id=None, edit_id=None):
         content = {
@@ -128,9 +132,7 @@ class DiscordClient(discord.Client):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        matrix_logger.info("Syncing forever.")
-        self.bg_task = self.loop.create_task(
-            matrix_client.sync_forever(timeout=30000))
+        self.bg_task = self.loop.create_task(MatrixClient().create())
 
     async def on_ready(self):
         print(f"Logged in as {self.user}")
@@ -324,12 +326,12 @@ class Process(object):
         return message
 
 
-async def main():
+def main():
     intents = discord.Intents.default()
     intents.members = True
 
-    await MatrixClient().create()
-    await DiscordClient(intents=intents).start(config["token"])
+    DiscordClient(intents=intents).run(config["token"])
+
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

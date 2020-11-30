@@ -66,10 +66,7 @@ async def on_message_edit(before, after):
 
     content = await process_discord(after)
 
-    await message_redact(message_cache[before.id], "Message edited")
-
-    matrix_message = await message_send(f"{content[0]} (edited)")
-    message_cache[after.id] = matrix_message
+    await message_send(content[0], edit_id=message_cache[before.id])
 
 
 @discord_client.event
@@ -191,7 +188,7 @@ async def create_matrix_client():
     await matrix_client.close()
 
 
-async def message_send(message, reply_id=None):
+async def message_send(message, reply_id=None, edit_id=None):
     content = {
         "msgtype": "m.text",
         "body": message,
@@ -200,6 +197,19 @@ async def message_send(message, reply_id=None):
     if reply_id:
         content["m.relates_to"] = {
             "m.in_reply_to": {"event_id": reply_id},
+        }
+
+    if edit_id:
+        content["body"] = f" * {message}"
+
+        content["m.new_content"] = {
+                "body": message,
+                "msgtype": "m.text"
+        }
+
+        content["m.relates_to"] = {
+                "event_id": edit_id,
+                "rel_type": "m.replace",
         }
 
     message = await matrix_client.room_send(
@@ -223,6 +233,18 @@ async def message_callback(room, event):
     # Don't act on activities in other rooms
     if room.room_id != config["room_id"]:
         return
+
+    # https://github.com/Rapptz/discord.py/issues/6058
+    # content_dict = event.source.get("content")
+    # try:
+    #     if content_dict["m.relates_to"]["rel_type"] == "m.replace":
+    #         edited_event = content_dict["m.relates_to"]["event_id"]
+    #         edited_content = content_dict["m.new_content"]["body"]
+    #         webhook_message = message_cache[edited_event]
+    #         await something_to_edit_webhook(webhook_message, edited_content)
+    #         return
+    # except KeyError:
+    #     pass
 
     message = event.body
 

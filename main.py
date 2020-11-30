@@ -78,9 +78,23 @@ class MatrixClient(object):
         }
 
         if reply_id:
+            reply_event = await matrix_client.room_get_event(
+                    config["room_id"], reply_id
+            )
+
+            reply_event = reply_event.event.source["content"]["body"]
+
             content["m.relates_to"] = {
                 "m.in_reply_to": {"event_id": reply_id},
             }
+
+            content["format"] = "org.matrix.custom.html"
+
+            content["formatted_body"] = (f"""<mx-reply><blockquote>
+<a href="https://matrix.to/#/{config["room_id"]}/{reply_id}">In reply to</a>
+<a href="https://matrix.to/#/{config["username"]}">{config["username"]}</a><br>
+{reply_event}</blockquote></mx-reply>{message}
+""")
 
         if edit_id:
             content["body"] = f" * {message}"

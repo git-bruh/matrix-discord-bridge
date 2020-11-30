@@ -1,8 +1,15 @@
+import asyncio
 import discord
+import re
 import json
 import logging
-import nio
-import re
+from nio import (
+    AsyncClient,
+    RoomMessageText,
+    RoomMessageMedia,
+    RedactionEvent,
+    EphemeralEvent
+)
 import os
 
 
@@ -30,301 +37,280 @@ def config_gen(config_file):
 
 config = config_gen("config.json")
 
+logging.basicConfig(level=logging.INFO)
 matrix_logger = logging.getLogger("matrix_logger")
 
-intents = discord.Intents.default()
-intents.members = True
-discord_client = discord.Client(intents=intents)
-logging.basicConfig(level=logging.INFO)
-
-message_cache = {}
+message_store = {}
 
 
-@discord_client.event
-async def on_ready():
-    print(f"Logged in as {discord_client.user}")
+class MatrixClient(object):
+    async def create(self):
+        homeserver = config["homeserver"]
+        username = config["username"]
+        password = config["password"]
 
-    # Start Matrix bot
-    await create_matrix_client()
+        global matrix_client
 
+        matrix_client = AsyncClient(homeserver, username)
 
-@discord_client.event
-async def on_message(message):
-    if message.author.bot or str(message.channel.id) != config["channel_id"]:
-        return
+        matrix_logger.info(await matrix_client.login(password))
 
-    content = await process_discord(message)
+        # Sync once to avoid acting on old messages
+        matrix_logger.info("Doing initial sync.")
+        await matrix_client.sync(30000)
 
-    matrix_message = await message_send(content[0], content[1])
-    message_cache[message.id] = matrix_message
+        # Set up event callbacks
+        callbacks = Callbacks()
+        matrix_client.add_event_callback(
+            callbacks.message_callback,
+            (RoomMessageText, RoomMessageMedia))
 
+        matrix_client.add_event_callback(
+            callbacks.redaction_callback, RedactionEvent)
 
-@discord_client.event
-async def on_message_edit(before, after):
-    if after.author.bot or str(after.channel.id) != config["channel_id"]:
-        return
+        matrix_client.add_ephemeral_callback(
+            callbacks.typing_callback, EphemeralEvent)
 
-    content = await process_discord(after)
-
-    await message_send(content[0], edit_id=message_cache[before.id])
-
-
-@discord_client.event
-async def on_message_delete(message):
-    if message.id in message_cache:
-        await message_redact(message_cache[message.id], "Message deleted")
-
-
-@discord_client.event
-async def on_typing(channel, user, when):
-    if user.bot or str(channel.id) != config["channel_id"]:
-        return
-
-    # Send typing event
-    await matrix_client.room_typing(config["room_id"], timeout=0)
-
-
-async def get_channel():
-    channel = int(config["channel_id"])
-    channel = discord_client.get_channel(channel)
-
-    return channel
-
-
-async def process_discord(message):
-    content = message.clean_content
-
-    replied_event = None
-    if message.reference:
-        replied_message = await message.channel.fetch_message(message.reference
-                                                              .message_id)
-        try:
-            replied_event = message_cache[replied_message.id]
-        except KeyError:
-            pass
-
-    # Replace emote IDs with names
-    content = re.sub(r"<a?(:\w+:)\d*>", r"\g<1>", content)
-
-    # Append attachments to message
-    for attachment in message.attachments:
-        content += f"\n{attachment.url}"
-
-    content = f"<{message.author.name}> {content}"
-
-    return content, replied_event
-
-
-async def process_matrix(message):
-    message = message.replace("@everyone", "@\u200Beveryone")
-    message = message.replace("@here", "@\u200Bhere")
-
-    mentions = re.findall(r"(^|\s)(@(\w*))", message)
-    emotes = re.findall(r":(.*?):", message)
-
-    channel = await get_channel()
-    guild = channel.guild
-
-    for emote in emotes:
-        emote_ = discord.utils.get(guild.emojis, name=emote)
-        if emote_:
-            message = message.replace(f":{emote}:", str(emote_))
-
-    for mention in mentions:
-        member = await guild.query_members(query=mention[2])
-        if member:
-            message = message.replace(mention[1], member[0].mention)
-
-    return message
-
-
-async def webhook_send(author, avatar, message, event_id):
-    channel = await get_channel()
-
-    # Create webhook if it doesn't exist
-    hook_name = "matrix_bridge"
-    hooks = await channel.webhooks()
-    hook = discord.utils.get(hooks, name=hook_name)
-    if not hook:
-        hook = await channel.create_webhook(name=hook_name)
-
-    # 'wait=True' allows us to store the sent message
-    try:
-        hook = await hook.send(username=author, avatar_url=avatar,
-                               content=message, wait=True)
-        message_cache[event_id] = hook
-    except discord.errors.HTTPException as e:
-        matrix_logger.warning(f"Failed to send message {event_id}: {e}")
-
-
-async def create_matrix_client():
-    homeserver = config["homeserver"]
-    username = config["username"]
-    password = config["password"]
-
-    timeout = 30000
-
-    global matrix_client
-
-    matrix_client = nio.AsyncClient(homeserver, username)
-    matrix_logger.info(await matrix_client.login(password))
-
-    # Sync once before adding callback to avoid acting on old messages
-    matrix_logger.info("Doing initial sync.")
-    await matrix_client.sync(timeout)
-
-    matrix_client.add_event_callback(message_callback, (nio.RoomMessageText,
-                                                        nio.RoomMessageMedia))
-
-    matrix_client.add_event_callback(redaction_callback, nio.RedactionEvent)
-
-    matrix_client.add_ephemeral_callback(typing_callback, nio.EphemeralEvent)
-
-    # Sync forever
-    matrix_logger.info("Syncing forever.")
-    await matrix_client.sync_forever(timeout=timeout)
-
-    await matrix_client.logout()
-    await matrix_client.close()
-
-
-async def message_send(message, reply_id=None, edit_id=None):
-    content = {
-        "msgtype": "m.text",
-        "body": message,
-    }
-
-    if reply_id:
-        content["m.relates_to"] = {
-            "m.in_reply_to": {"event_id": reply_id},
+    async def message_send(self, message, reply_id=None, edit_id=None):
+        content = {
+            "msgtype": "m.text",
+            "body": message,
         }
 
-    if edit_id:
-        content["body"] = f" * {message}"
+        if reply_id:
+            content["m.relates_to"] = {
+                "m.in_reply_to": {"event_id": reply_id},
+            }
 
-        content["m.new_content"] = {
-                "body": message,
-                "msgtype": "m.text"
-        }
+        if edit_id:
+            content["body"] = f" * {message}"
 
-        content["m.relates_to"] = {
-                "event_id": edit_id,
-                "rel_type": "m.replace",
-        }
+            content["m.new_content"] = {
+                    "body": message,
+                    "msgtype": "m.text"
+            }
 
-    message = await matrix_client.room_send(
-        room_id=config["room_id"],
-        message_type="m.room.message",
-        content=content
-    )
+            content["m.relates_to"] = {
+                    "event_id": edit_id,
+                    "rel_type": "m.replace",
+            }
 
-    return message.event_id
+        message = await matrix_client.room_send(
+            room_id=config["room_id"],
+            message_type="m.room.message",
+            content=content
+        )
 
+        return message.event_id
 
-async def message_redact(message, reason):
-    await matrix_client.room_redact(
-        room_id=config["room_id"],
-        event_id=message,
-        reason=reason
-    )
-
-
-async def message_callback(room, event):
-    # Don't act on activities in other rooms
-    if room.room_id != config["room_id"]:
-        return
-
-    # https://github.com/Rapptz/discord.py/issues/6058
-    # content_dict = event.source.get("content")
-    # try:
-    #     if content_dict["m.relates_to"]["rel_type"] == "m.replace":
-    #         edited_event = content_dict["m.relates_to"]["event_id"]
-    #         edited_content = content_dict["m.new_content"]["body"]
-    #         webhook_message = message_cache[edited_event]
-    #         await something_to_edit_webhook(webhook_message, edited_content)
-    #         return
-    # except KeyError:
-    #     pass
-
-    message = event.body
-
-    if not message:
-        return
-
-    # Don't act on ourselves
-    if event.sender == matrix_client.user:
-        return
-
-    author = event.sender[1:]
-    avatar = None
-
-    homeserver = author.split(":")[-1]
-    url = "https://matrix.org/_matrix/media/r0/download"
-
-    # Replace Discord mentions and emotes with IDs
-    message = await process_matrix(message)
-
-    # Get attachments
-    try:
-        attachment = event.url.split("/")[-1]
-
-        # Highlight attachment name
-        message = f"`{message}`"
-
-        message += f"\n{url}/{homeserver}/{attachment}"
-    except AttributeError:
-        pass
-
-    # Get avatar
-    for user in room.users.values():
-        if user.user_id == event.sender:
-            if user.avatar_url:
-                avatar = user.avatar_url.split("/")[-1]
-                avatar = f"{url}/{homeserver}/{avatar}"
-                break
-
-    await webhook_send(author, avatar, message, event.event_id)
+    async def message_redact(self, message):
+        await matrix_client.room_redact(
+            room_id=config["room_id"],
+            event_id=message
+        )
 
 
-async def redaction_callback(room, event):
-    # Don't act on activities in other rooms
-    if room.room_id != config["room_id"]:
-        return
+class DiscordClient(discord.Client):
+    async def on_ready(self):
+        print(f"Logged in as {self.user}")
 
-    # Don't act on ourselves
-    if event.sender == matrix_client.user:
-        return
+        global channel
+        channel = int(config["channel_id"])
+        channel = self.get_channel(channel)
+        matrix_logger.info("Syncing forever.")
+        await matrix_client.sync_forever(timeout=30000)
 
-    # Redact webhook message
-    try:
-        message = message_cache[event.redacts]
-        await message.delete()
-    except KeyError:
-        pass
+    async def on_message(self, message):
+        if message.author.bot or str(message.channel.id) != \
+                config["channel_id"]:
+            return
 
+        content = await Process().discord(message)
 
-async def typing_callback(room, event):
-    channel = await get_channel()
+        matrix_message = await MatrixClient().message_send(
+            content[0], content[1])
 
-    # Don't act on activities in other rooms
-    if room.room_id != config["room_id"]:
-        return
+        message_store[message.id] = matrix_message
 
-    if room.typing_users:
-        # Don't act on ourselves
-        if len(room.typing_users) == 1 \
-                and room.typing_users[0] == matrix_client.user:
+    async def on_message_edit(self, before, after):
+        if after.author.bot or str(after.channel.id) != \
+                config["channel_id"]:
+            return
+
+        content = await Process().discord(after)
+
+        await MatrixClient().message_send(
+            content[0], edit_id=message_store[before.id])
+
+    async def on_message_delete(self, message):
+        if message.id in message_store:
+            await MatrixClient().message_redact(message_store[message.id])
+
+    async def on_typing(self, channel, user, when):
+        if user.bot or str(channel.id) != config["channel_id"]:
             return
 
         # Send typing event
-        async with channel.typing():
+        await matrix_client.room_typing(config["room_id"], timeout=0)
+
+    async def webhook_send(self, author, avatar, message, event_id):
+        # Create webhook if it doesn't exist
+        hook_name = "matrix_bridge"
+        hooks = await channel.webhooks()
+        hook = discord.utils.get(hooks, name=hook_name)
+        if not hook:
+            hook = await channel.create_webhook(name=hook_name)
+
+        # 'wait=True' allows us to store the sent message
+        try:
+            hook = await hook.send(username=author, avatar_url=avatar,
+                                   content=message, wait=True)
+            message_store[event_id] = hook
+        except discord.errors.HTTPException as e:
+            matrix_logger.warning(f"Failed to send message {event_id}: {e}")
+
+
+class Callbacks(object):
+    async def message_callback(self, room, event):
+        # Don't act on activities in other rooms
+        if room.room_id != config["room_id"]:
+            return
+
+        # https://github.com/Rapptz/discord.py/issues/6058
+        # content_dict = event.source.get("content")
+        # try:
+        #     if content_dict["m.relates_to"]["rel_type"] == "m.replace":
+        #         edited_event = content_dict["m.relates_to"]["event_id"]
+        #         edited_content = content_dict["m.new_content"]["body"]
+        #         webhook_message = message_cache[edited_event]
+        #         await something_edit_webhook(webhook_message, edited_content)
+        #         return
+        # except KeyError:
+        #     pass
+
+        message = event.body
+
+        if not message:
+            return
+
+        # Don't act on ourselves
+        if event.sender == matrix_client.user:
+            return
+
+        author = event.sender[1:]
+        avatar = None
+
+        homeserver = author.split(":")[-1]
+        url = "https://matrix.org/_matrix/media/r0/download"
+
+        message = await Process().matrix(message)
+
+        # Get attachments
+        try:
+            attachment = event.url.split("/")[-1]
+
+            # Highlight attachment name
+            message = f"`{message}`"
+
+            message += f"\n{url}/{homeserver}/{attachment}"
+        except AttributeError:
             pass
 
+        # Get avatar
+        for user in room.users.values():
+            if user.user_id == event.sender:
+                if user.avatar_url:
+                    avatar = user.avatar_url.split("/")[-1]
+                    avatar = f"{url}/{homeserver}/{avatar}"
+                    break
 
-def main():
-    # Start Discord bot
-    discord_client.run(config["token"])
+        await DiscordClient().webhook_send(
+            author, avatar, message, event.event_id)
 
+    async def redaction_callback(self, room, event):
+        # Don't act on activities in other rooms
+        if room.room_id != config["room_id"]:
+            return
+
+        # Don't act on ourselves
+        if event.sender == matrix_client.user:
+            return
+
+        # Redact webhook message
+        try:
+            message = message_store[event.redacts]
+            await message.delete()
+        except KeyError:
+            pass
+
+    async def typing_callback(self, room, event):
+        # Don't act on activities in other rooms
+        if room.room_id != config["room_id"]:
+            return
+
+        if room.typing_users:
+            # Don't act on ourselves
+            if len(room.typing_users) == 1 \
+                    and room.typing_users[0] == matrix_client.user:
+                return
+
+            # Send typing event
+            async with channel.typing():
+                pass
+
+
+class Process(object):
+    async def discord(self, message):
+        content = message.clean_content
+
+        replied_event = None
+        if message.reference:
+            replied_message = await message.channel.fetch_message(
+                message.reference.message_id)
+            try:
+                replied_event = message_store[replied_message.id]
+            except KeyError:
+                pass
+
+        # Replace emote IDs with names
+        content = re.sub(r"<a?(:\w+:)\d*>", r"\g<1>", content)
+
+        # Append attachments to message
+        for attachment in message.attachments:
+            content += f"\n{attachment.url}"
+
+        content = f"<{message.author.name}> {content}"
+
+        return content, replied_event
+
+    async def matrix(self, message):
+        message = message.replace("@everyone", "@\u200Beveryone")
+        message = message.replace("@here", "@\u200Bhere")
+
+        mentions = re.findall(r"(^|\s)(@(\w*))", message)
+        emotes = re.findall(r":(.*?):", message)
+
+        guild = channel.guild
+
+        for emote in emotes:
+            emote_ = discord.utils.get(guild.emojis, name=emote)
+            if emote_:
+                message = message.replace(f":{emote}:", str(emote_))
+
+        for mention in mentions:
+            member = await guild.query_members(query=mention[2])
+            if member:
+                message = message.replace(mention[1], member[0].mention)
+
+        return message
+
+
+async def main():
+    intents = discord.Intents.default()
+    intents.members = True
+
+    await MatrixClient().create()
+    await DiscordClient(intents=intents).start(config["token"])
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

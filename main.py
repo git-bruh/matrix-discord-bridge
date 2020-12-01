@@ -1,15 +1,9 @@
 import discord
-import re
 import json
 import logging
-from nio import (
-    AsyncClient,
-    RoomMessageText,
-    RoomMessageMedia,
-    RedactionEvent,
-    EphemeralEvent
-)
+import nio
 import os
+import re
 
 
 def config_gen(config_file):
@@ -51,7 +45,7 @@ class MatrixClient(object):
 
         global matrix_client
 
-        matrix_client = AsyncClient(homeserver, username)
+        matrix_client = nio.AsyncClient(homeserver, username)
 
         matrix_logger.info(await matrix_client.login(password))
 
@@ -62,13 +56,13 @@ class MatrixClient(object):
         callbacks = Callbacks()
         matrix_client.add_event_callback(
             callbacks.message_callback,
-            (RoomMessageText, RoomMessageMedia))
+            (nio.RoomMessageText, nio.RoomMessageMedia))
 
         matrix_client.add_event_callback(
-            callbacks.redaction_callback, RedactionEvent)
+            callbacks.redaction_callback, nio.RedactionEvent)
 
         matrix_client.add_ephemeral_callback(
-            callbacks.typing_callback, EphemeralEvent)
+            callbacks.typing_callback, nio.EphemeralEvent)
 
         matrix_logger.info("Syncing forever.")
         await matrix_client.sync_forever(timeout=timeout)

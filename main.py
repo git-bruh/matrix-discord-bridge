@@ -127,6 +127,22 @@ class MatrixClient(object):
             event_id=message
         )
 
+    async def webhook_send(self, author, avatar, message, event_id):
+        # Create webhook if it doesn't exist
+        hook_name = "matrix_bridge"
+        hooks = await channel.webhooks()
+        hook = discord.utils.get(hooks, name=hook_name)
+        if not hook:
+            hook = await channel.create_webhook(name=hook_name)
+
+        # 'wait=True' allows us to store the sent message
+        try:
+            hook = await hook.send(username=author, avatar_url=avatar,
+                                   content=message, wait=True)
+            message_store[event_id] = hook
+        except discord.errors.HTTPException as e:
+            matrix_logger.warning(f"Failed to send message {event_id}: {e}")
+
 
 class DiscordClient(discord.Client):
     def __init__(self, *args, **kwargs):
@@ -173,22 +189,6 @@ class DiscordClient(discord.Client):
 
         # Send typing event
         await matrix_client.room_typing(config["room_id"], timeout=0)
-
-    async def webhook_send(self, author, avatar, message, event_id):
-        # Create webhook if it doesn't exist
-        hook_name = "matrix_bridge"
-        hooks = await channel.webhooks()
-        hook = discord.utils.get(hooks, name=hook_name)
-        if not hook:
-            hook = await channel.create_webhook(name=hook_name)
-
-        # 'wait=True' allows us to store the sent message
-        try:
-            hook = await hook.send(username=author, avatar_url=avatar,
-                                   content=message, wait=True)
-            message_store[event_id] = hook
-        except discord.errors.HTTPException as e:
-            matrix_logger.warning(f"Failed to send message {event_id}: {e}")
 
 
 class Callbacks(object):
@@ -245,7 +245,7 @@ class Callbacks(object):
                     avatar = f"{url}/{homeserver}/{avatar}"
                     break
 
-        await DiscordClient().webhook_send(
+        await MatrixClient().webhook_send(
             author, avatar, message, event.event_id)
 
     async def redaction_callback(self, room, event):
@@ -305,9 +305,6 @@ class Process(object):
         return content, replied_event
 
     async def matrix(self, message):
-        message = message.replace("@everyone", "@\u200Beveryone")
-        message = message.replace("@here", "@\u200Bhere")
-
         mentions = re.findall(r"(^|\s)(@(\w*))", message)
         emotes = re.findall(r":(.*?):", message)
 
@@ -322,6 +319,9 @@ class Process(object):
             member = await guild.query_members(query=mention[2])
             if member:
                 message = message.replace(mention[1], member[0].mention)
+
+        message = message.replace("@everyone", "@\u200Beveryone")
+        message = message.replace("@here", "@\u200Bhere")
 
         return message
 

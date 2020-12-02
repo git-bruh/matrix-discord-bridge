@@ -18,8 +18,8 @@ NOTE: [Privileged Intents](https://discordpy.readthedocs.io/en/latest/intents.ht
 
 - [x] Sending messages
 - [x] Discord webhooks (with avatars)
-- [x] Attachments (URL)
-- [x] Typing status
+- [x] Attachments (Converted to URLs)
+- [x] Typing status (Not very accurate)
 - [x] Redacting messages
-- [x] Editing messages (Partial)
+- [x] Editing messages (Partial, see [this issue](https://github.com/Rapptz/discord.py/issues/6058))
 - [x] Replies

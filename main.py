@@ -122,9 +122,10 @@ class MatrixClient(nio.AsyncClient):
         if not hook:
             hook = await channel.create_webhook(name=hook_name)
 
+        # Username must be between 1 and 80 characters in length
         # 'wait=True' allows us to store the sent message
         try:
-            hook = await hook.send(username=author, avatar_url=avatar,
+            hook = await hook.send(username=author[:80], avatar_url=avatar,
                                    content=message, wait=True)
             message_store[event_id] = hook
         except discord.errors.HTTPException as e:

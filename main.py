@@ -82,11 +82,10 @@ class MatrixClient(nio.AsyncClient):
 
             content["format"] = "org.matrix.custom.html"
 
-            content["formatted_body"] = (f"""<mx-reply><blockquote>
+            content["formatted_body"] = f"""<mx-reply><blockquote>
 <a href="https://matrix.to/#/{config["room_id"]}/{reply_id}">In reply to</a>
 <a href="https://matrix.to/#/{config["username"]}">{config["username"]}</a><br>
-{reply_event}</blockquote></mx-reply>{message}
-""")
+{reply_event}</blockquote></mx-reply>{message}"""
 
         if edit_id:
             content["body"] = f" * {message}"
@@ -143,9 +142,10 @@ class MatrixClient(nio.AsyncClient):
                 message = message.replace(f":{emote}:", str(emote_))
 
         for mention in mentions:
-            member = await guild.query_members(query=mention[2])
-            if member:
-                message = message.replace(mention[1], member[0].mention)
+            if mention[2] != "":
+                member = await guild.query_members(query=mention[2])
+                if member:
+                    message = message.replace(mention[1], member[0].mention)
 
         message = message.replace("@everyone", "@\u200Beveryone")
         message = message.replace("@here", "@\u200Bhere")
@@ -188,7 +188,7 @@ class DiscordClient(discord.Client):
 
         content = await self.process_message(after)
 
-        await self.matrix_client().message_send(
+        await self.matrix_client.message_send(
             content[0], edit_id=message_store[before.id])
 
     async def on_message_delete(self, message):
@@ -221,7 +221,7 @@ class DiscordClient(discord.Client):
         for attachment in message.attachments:
             content += f"\n{attachment.url}"
 
-        content = f"<{message.author.name}> {content}"
+        content = f"[{message.author.name}] {content}"
 
         return content, replied_event
 

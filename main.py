@@ -238,16 +238,6 @@ class Callbacks(object):
                 event.sender == self.client.user:
             return
 
-        # https://github.com/Rapptz/discord.py/issues/6058
-        content_dict = event.source.get("content")
-        try:
-            if content_dict["m.relates_to"]["rel_type"] == "m.replace":
-                edited_event = content_dict["m.relates_to"]["event_id"]
-                webhook_message = message_store[edited_event]
-                await webhook_message.delete()
-        except KeyError:
-            pass
-
         message = event.body
 
         if not message:

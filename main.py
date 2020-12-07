@@ -151,9 +151,6 @@ class MatrixClient(nio.AsyncClient):
                 if member:
                     message = message.replace(mention[1], member[0].mention)
 
-        message = message.replace("@everyone", "@\u200Beveryone")
-        message = message.replace("@here", "@\u200Bhere")
-
         return message
 
 
@@ -318,7 +315,10 @@ def main():
     intents = discord.Intents.default()
     intents.members = True
 
-    DiscordClient(intents=intents).run(config["token"])
+    allowed_mentions = discord.AllowedMentions(everyone=False, roles=False)
+
+    DiscordClient(intents=intents, allowed_mentions=allowed_mentions).run(
+        config["token"])
 
 
 if __name__ == "__main__":

@@ -37,7 +37,7 @@ message_store = {}
 
 
 class MatrixClient(nio.AsyncClient):
-    async def create(self):
+    async def create(self, discord_client):
         password = config["password"]
         timeout = 30000
 
@@ -57,6 +57,8 @@ class MatrixClient(nio.AsyncClient):
 
         self.add_ephemeral_callback(
             callbacks.typing_callback, nio.EphemeralEvent)
+
+        await discord_client.wait_until_ready()
 
         matrix_logger.info("Syncing forever.")
         await self.sync_forever(timeout=timeout)
@@ -161,7 +163,7 @@ class DiscordClient(discord.Client):
         self.matrix_client = MatrixClient(
             config["homeserver"], config["username"])
 
-        self.bg_task = self.loop.create_task(self.matrix_client.create())
+        self.bg_task = self.loop.create_task(self.matrix_client.create(self))
 
     async def on_ready(self):
         print(f"Logged in as {self.user}")

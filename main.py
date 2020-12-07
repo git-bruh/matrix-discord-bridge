@@ -50,7 +50,8 @@ class MatrixClient(nio.AsyncClient):
         callbacks = Callbacks(self, self.process_message)
         self.add_event_callback(
             callbacks.message_callback,
-            (nio.RoomMessageText, nio.RoomMessageMedia))
+            (nio.RoomMessageText, nio.RoomMessageMedia,
+             nio.RoomMessageEmote))
 
         self.add_event_callback(
             callbacks.redaction_callback, nio.RedactionEvent)

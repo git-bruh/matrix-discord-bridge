@@ -243,6 +243,15 @@ class Callbacks(object):
         if not message:
             return
 
+        content_dict = event.source.get("content")
+
+        try:
+            if content_dict["m.relates_to"]["m.in_reply_to"]["event_id"] in \
+                    message_store.values():
+                message = message.replace(f"<{config['username']}>", "", 1)
+        except KeyError:
+            pass
+
         author = event.sender[1:]
         avatar = None
 

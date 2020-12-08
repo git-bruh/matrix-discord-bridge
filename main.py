@@ -246,6 +246,12 @@ class Callbacks(object):
 
         content_dict = event.source.get("content")
 
+        author = event.sender[1:]
+        avatar = None
+
+        homeserver = author.split(":")[-1]
+        url = "https://matrix.org/_matrix/media/r0/download"
+
         try:
             if content_dict["m.relates_to"]["m.in_reply_to"]["event_id"] in \
                     message_store.values():
@@ -253,11 +259,8 @@ class Callbacks(object):
         except KeyError:
             pass
 
-        author = event.sender[1:]
-        avatar = None
-
-        homeserver = author.split(":")[-1]
-        url = "https://matrix.org/_matrix/media/r0/download"
+        if content_dict["msgtype"] == "m.emote":
+            message = f"* {author.split(':')[0]} {message}"
 
         message = await self.process_message(message)
 

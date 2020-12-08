@@ -131,6 +131,7 @@ class MatrixClient(nio.AsyncClient):
             hook = await hook.send(username=author[:80], avatar_url=avatar,
                                    content=message, wait=True)
             message_store[event_id] = hook
+            message_store[hook.id] = event_id
         except discord.errors.HTTPException as e:
             matrix_logger.warning(f"Failed to send message {event_id}: {e}")
 

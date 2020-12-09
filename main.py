@@ -137,7 +137,7 @@ class MatrixClient(nio.AsyncClient):
 
     async def process_message(self, message):
         mentions = re.findall(r"(^|\s)(@(\w*))", message)
-        emotes = re.findall(r":(.*?):", message)
+        emotes = re.findall(r":(\w*):", message)
 
         guild = channel.guild
 

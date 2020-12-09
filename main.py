@@ -141,10 +141,13 @@ class MatrixClient(nio.AsyncClient):
 
         guild = channel.guild
 
+        added_emotes = []
         for emote in emotes:
-            emote_ = discord.utils.get(guild.emojis, name=emote)
-            if emote_:
-                message = message.replace(f":{emote}:", str(emote_))
+            if emote not in added_emotes:
+                added_emotes.append(emote)
+                emote_ = discord.utils.get(guild.emojis, name=emote)
+                if emote_:
+                    message = message.replace(f":{emote}:", str(emote_))
 
         for mention in mentions:
             if mention[2] != "":

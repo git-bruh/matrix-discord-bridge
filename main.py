@@ -246,10 +246,10 @@ class Callbacks(object):
 
         content_dict = event.source.get("content")
 
-        author = event.sender[1:]
+        author = event.sender.split(":")[0][1:]
         avatar = None
 
-        homeserver = author.split(":")[-1]
+        homeserver = event.sender.split(":")[-1]
         url = "https://matrix.org/_matrix/media/r0/download"
 
         try:
@@ -260,7 +260,7 @@ class Callbacks(object):
             pass
 
         if content_dict["msgtype"] == "m.emote":
-            message = f"* {author.split(':')[0]} {message}"
+            message = f"_{author} {message}_"
 
         message = await self.process_message(message)
 

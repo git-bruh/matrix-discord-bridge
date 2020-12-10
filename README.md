@@ -14,6 +14,11 @@ A simple bridge between Matrix and Discord written in Python.
 
 NOTE: [Privileged Intents](https://discordpy.readthedocs.io/en/latest/intents.html#privileged-intents) must be enabled for your Discord bot.
 
+## Known Issues
+
+* Random Discord message fails to be deleted on Matrix.
+* Discord messages lose their relation (if replying) to Matrix messages on being edited.
+
 ## What Works
 
 - [x] Sending messages

@@ -256,6 +256,16 @@ class Callbacks(object):
         url = "https://matrix.org/_matrix/media/r0/download"
 
         try:
+            if content_dict["m.relates_to"]["rel_type"] == "m.replace":
+                edited_event = content_dict["m.relates_to"]["event_id"]
+                edited_content = content_dict["m.new_content"]["body"]
+                webhook_message = message_store[edited_event]
+                await webhook_message.edit(content=edited_content)
+                return
+        except KeyError:
+            pass
+
+        try:
             if content_dict["m.relates_to"]["m.in_reply_to"]["event_id"] in \
                     message_store.values():
                 message = message.replace(f"<{config['username']}>", "", 1)

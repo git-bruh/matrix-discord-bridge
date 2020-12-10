@@ -258,7 +258,8 @@ class Callbacks(object):
         try:
             if content_dict["m.relates_to"]["rel_type"] == "m.replace":
                 edited_event = content_dict["m.relates_to"]["event_id"]
-                edited_content = content_dict["m.new_content"]["body"]
+                edited_content = await self.process_message(
+                    content_dict["m.new_content"]["body"])
                 webhook_message = message_store[edited_event]
                 await webhook_message.edit(content=edited_content)
                 return

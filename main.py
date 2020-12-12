@@ -9,11 +9,10 @@ import re
 def config_gen(config_file):
     config_dict = {
         "homeserver": "https://matrix.org",
-        "room_id": "room:matrix.org",
         "username": "@name:matrix.org",
         "password": "my-secret-password",
-        "channel_id": "channel",
-        "token": "my-secret-token"
+        "token": "my-secret-token",
+        "bridge": {"channel_id": "room_id", }
     }
 
     if not os.path.exists(config_file):
@@ -34,6 +33,7 @@ logging.basicConfig(level=logging.INFO)
 matrix_logger = logging.getLogger("matrix_logger")
 
 message_store = {}
+channel_store = {}
 
 
 class MatrixClient(nio.AsyncClient):
@@ -66,7 +66,10 @@ class MatrixClient(nio.AsyncClient):
 
         await self.close()
 
-    async def message_send(self, message, reply_id=None, edit_id=None):
+    async def message_send(self, message, channel_id,
+                           reply_id=None, edit_id=None):
+        room_id = config["bridge"][str(channel_id)]
+
         content = {
             "msgtype": "m.text",
             "body": message,
@@ -74,7 +77,7 @@ class MatrixClient(nio.AsyncClient):
 
         if reply_id:
             reply_event = await self.room_get_event(
-                    config["room_id"], reply_id
+                    room_id, reply_id
             )
 
             reply_event = reply_event.event.source["content"]["body"]
@@ -86,7 +89,7 @@ class MatrixClient(nio.AsyncClient):
             content["format"] = "org.matrix.custom.html"
 
             content["formatted_body"] = f"""<mx-reply><blockquote>
-<a href="https://matrix.to/#/{config["room_id"]}/{reply_id}">In reply to</a>
+<a href="https://matrix.to/#/{room_id}/{reply_id}">In reply to</a>
 <a href="https://matrix.to/#/{config["username"]}">{config["username"]}</a><br>
 {reply_event}</blockquote></mx-reply>{message}"""
 
@@ -104,20 +107,23 @@ class MatrixClient(nio.AsyncClient):
             }
 
         message = await self.room_send(
-            room_id=config["room_id"],
+            room_id=room_id,
             message_type="m.room.message",
             content=content
         )
 
         return message.event_id
 
-    async def message_redact(self, message):
+    async def message_redact(self, message, channel_id):
         await self.room_redact(
-            room_id=config["room_id"],
+            room_id=config["bridge"][str(channel_id)],
             event_id=message
         )
 
-    async def webhook_send(self, author, avatar, message, event_id):
+    async def webhook_send(self, author, avatar, message,
+                           event_id, channel_id):
+        channel = channel_store[channel_id]
+
         # Create webhook if it doesn't exist
         hook_name = "matrix_bridge"
         hooks = await channel.webhooks()
@@ -135,11 +141,11 @@ class MatrixClient(nio.AsyncClient):
         except discord.errors.HTTPException as e:
             matrix_logger.warning(f"Failed to send message {event_id}: {e}")
 
-    async def process_message(self, message):
+    async def process_message(self, message, channel_id):
         mentions = re.findall(r"(^|\s)(@(\w*))", message)
         emotes = re.findall(r":(\w*):", message)
 
-        guild = channel.guild
+        guild = channel_store[channel_id].guild
 
         added_emotes = []
         for emote in emotes:
@@ -170,42 +176,44 @@ class DiscordClient(discord.Client):
     async def on_ready(self):
         print(f"Logged in as {self.user}")
 
-        global channel
-        channel = int(config["channel_id"])
-        channel = self.get_channel(channel)
+        for channel in config["bridge"].keys():
+            channel_store[channel] = self.get_channel(int(channel))
 
     async def on_message(self, message):
-        if message.author.bot or str(message.channel.id) != \
-                config["channel_id"]:
+        if message.author.bot or str(message.channel.id) not in \
+                config["bridge"].keys():
             return
 
         content = await self.process_message(message)
 
         matrix_message = await self.matrix_client.message_send(
-            content[0], content[1])
+            content[0], message.channel.id, reply_id=content[1])
 
         message_store[message.id] = matrix_message
 
     async def on_message_edit(self, before, after):
-        if after.author.bot or str(after.channel.id) != \
-                config["channel_id"]:
+        if after.author.bot or str(after.channel.id) not in \
+                config["bridge"].keys():
             return
 
         content = await self.process_message(after)
 
         await self.matrix_client.message_send(
-            content[0], edit_id=message_store[before.id])
+            content[0], after.channel.id, edit_id=message_store[before.id])
 
     async def on_message_delete(self, message):
         if message.id in message_store:
-            await self.matrix_client.message_redact(message_store[message.id])
+            await self.matrix_client.message_redact(
+                message_store[message.id], message.channel.id)
 
     async def on_typing(self, channel, user, when):
-        if user.bot or str(channel.id) != config["channel_id"]:
+        if user.bot or str(channel.id) not in \
+                config["bridge"].keys():
             return
 
         # Send typing event
-        await self.matrix_client.room_typing(config["room_id"], timeout=0)
+        await self.matrix_client.room_typing(
+            config["bridge"][str(channel.id)], timeout=0)
 
     async def process_message(self, message):
         content = message.clean_content
@@ -236,9 +244,16 @@ class Callbacks(object):
         self.client = client
         self.process_message = process_message
 
+    def get_channel(self, room):
+        channel_id = next(
+            (channel_id for channel_id, room_id in config["bridge"].items()
+                if room_id == room.room_id), None)
+
+        return channel_id
+
     async def message_callback(self, room, event):
         # Ignore messages from ourselves or other rooms
-        if room.room_id != config["room_id"] or \
+        if room.room_id not in config["bridge"].values() or \
                 event.sender == self.client.user:
             return
 
@@ -248,6 +263,8 @@ class Callbacks(object):
             return
 
         content_dict = event.source.get("content")
+
+        channel_id = self.get_channel(room)
 
         author = event.sender.split(":")[0][1:]
         avatar = None
@@ -259,7 +276,7 @@ class Callbacks(object):
             if content_dict["m.relates_to"]["rel_type"] == "m.replace":
                 edited_event = content_dict["m.relates_to"]["event_id"]
                 edited_content = await self.process_message(
-                    content_dict["m.new_content"]["body"])
+                    content_dict["m.new_content"]["body"], channel_id)
                 webhook_message = message_store[edited_event]
                 await webhook_message.edit(content=edited_content)
                 return
@@ -276,7 +293,7 @@ class Callbacks(object):
         if content_dict["msgtype"] == "m.emote":
             message = f"_{author} {message}_"
 
-        message = await self.process_message(message)
+        message = await self.process_message(message, channel_id)
 
         # Get attachments
         try:
@@ -298,11 +315,11 @@ class Callbacks(object):
                     break
 
         await self.client.webhook_send(
-            author, avatar, message, event.event_id)
+            author, avatar, message, event.event_id, channel_id)
 
     async def redaction_callback(self, room, event):
         # Ignore messages from ourselves or other rooms
-        if room.room_id != config["room_id"] or \
+        if room.room_id not in config["bridge"].values() or \
                 event.sender == self.client.user:
             return
 
@@ -315,7 +332,7 @@ class Callbacks(object):
 
     async def typing_callback(self, room, event):
         # Ignore events from other rooms
-        if room.room_id != config["room_id"]:
+        if room.room_id not in config["bridge"].values():
             return
 
         if room.typing_users:
@@ -324,8 +341,10 @@ class Callbacks(object):
                     and room.typing_users[0] == self.client.user:
                 return
 
+            channel_id = self.get_channel(room)
+
             # Send typing event
-            async with channel.typing():
+            async with channel_store[channel_id].typing():
                 pass
 
 

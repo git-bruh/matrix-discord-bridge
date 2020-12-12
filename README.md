@@ -28,3 +28,4 @@ NOTE: [Privileged Intents](https://discordpy.readthedocs.io/en/latest/intents.ht
 - [x] Redacting messages
 - [x] Editing messages
 - [x] Replies
+- [x] Bridging multiple channels/rooms

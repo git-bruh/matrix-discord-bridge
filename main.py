@@ -327,6 +327,9 @@ class Callbacks(object):
         try:
             message = message_store[event.redacts]
             await message.delete()
+        except discord.errors.NotFound as e:
+            matrix_logger.warning(
+                f"Failed to delete message {event.event_id}: {e}")
         except KeyError:
             pass
 

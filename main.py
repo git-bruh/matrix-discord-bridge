@@ -51,13 +51,16 @@ class MatrixClient(nio.AsyncClient):
         self.add_event_callback(
             callbacks.message_callback,
             (nio.RoomMessageText, nio.RoomMessageMedia,
-             nio.RoomMessageEmote))
+             nio.RoomMessageEmote)
+        )
 
         self.add_event_callback(
-            callbacks.redaction_callback, nio.RedactionEvent)
+            callbacks.redaction_callback, nio.RedactionEvent
+        )
 
         self.add_ephemeral_callback(
-            callbacks.typing_callback, nio.EphemeralEvent)
+            callbacks.typing_callback, nio.EphemeralEvent
+        )
 
         await discord_client.wait_until_ready()
 
@@ -187,7 +190,8 @@ class DiscordClient(discord.Client):
         content = await self.process_message(message)
 
         matrix_message = await self.matrix_client.message_send(
-            content[0], message.channel.id, reply_id=content[1])
+            content[0], message.channel.id, reply_id=content[1]
+        )
 
         message_store[message.id] = matrix_message
 
@@ -199,12 +203,14 @@ class DiscordClient(discord.Client):
         content = await self.process_message(after)
 
         await self.matrix_client.message_send(
-            content[0], after.channel.id, edit_id=message_store[before.id])
+            content[0], after.channel.id, edit_id=message_store[before.id]
+        )
 
     async def on_message_delete(self, message):
         if message.id in message_store:
             await self.matrix_client.message_redact(
-                message_store[message.id], message.channel.id)
+                message_store[message.id], message.channel.id
+            )
 
     async def on_typing(self, channel, user, when):
         if user.bot or str(channel.id) not in \
@@ -213,7 +219,8 @@ class DiscordClient(discord.Client):
 
         # Send typing event
         await self.matrix_client.room_typing(
-            config["bridge"][str(channel.id)], timeout=0)
+            config["bridge"][str(channel.id)], timeout=0
+        )
 
     async def process_message(self, message):
         content = message.clean_content
@@ -221,7 +228,8 @@ class DiscordClient(discord.Client):
         replied_event = None
         if message.reference:
             replied_message = await message.channel.fetch_message(
-                message.reference.message_id)
+                message.reference.message_id
+            )
             try:
                 replied_event = message_store[replied_message.id]
             except KeyError:
@@ -247,7 +255,8 @@ class Callbacks(object):
     def get_channel(self, room):
         channel_id = next(
             (channel_id for channel_id, room_id in config["bridge"].items()
-                if room_id == room.room_id), None)
+                if room_id == room.room_id), None
+        )
 
         return channel_id
 
@@ -276,7 +285,8 @@ class Callbacks(object):
             if content_dict["m.relates_to"]["rel_type"] == "m.replace":
                 edited_event = content_dict["m.relates_to"]["event_id"]
                 edited_content = await self.process_message(
-                    content_dict["m.new_content"]["body"], channel_id)
+                    content_dict["m.new_content"]["body"], channel_id
+                )
                 webhook_message = message_store[edited_event]
                 await webhook_message.edit(content=edited_content)
                 return
@@ -315,7 +325,8 @@ class Callbacks(object):
                     break
 
         await self.client.webhook_send(
-            author, avatar, message, event.event_id, channel_id)
+            author, avatar, message, event.event_id, channel_id
+        )
 
     async def redaction_callback(self, room, event):
         # Ignore messages from ourselves or other rooms
@@ -329,7 +340,8 @@ class Callbacks(object):
             await message.delete()
         except discord.errors.NotFound as e:
             matrix_logger.warning(
-                f"Failed to delete message {event.event_id}: {e}")
+                f"Failed to delete message {event.event_id}: {e}"
+            )
         except KeyError:
             pass
 
@@ -358,7 +370,8 @@ def main():
     allowed_mentions = discord.AllowedMentions(everyone=False, roles=False)
 
     DiscordClient(intents=intents, allowed_mentions=allowed_mentions).run(
-        config["token"])
+        config["token"]
+    )
 
 
 if __name__ == "__main__":

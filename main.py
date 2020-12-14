@@ -288,7 +288,14 @@ class Callbacks(object):
                     content_dict["m.new_content"]["body"], channel_id
                 )
                 webhook_message = message_store[edited_event]
-                await webhook_message.edit(content=edited_content)
+
+                try:
+                    await webhook_message.edit(content=edited_content)
+                except discord.errors.NotFound as e:
+                    matrix_logger.warning(
+                        f"Failed to edit message {edited_event}: {e}"
+                    )
+
                 return
         except KeyError:
             pass

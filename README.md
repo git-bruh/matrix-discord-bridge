@@ -1,6 +1,6 @@
 # matrix-discord-bridge
 
-A simple bridge between Matrix and Discord written in Python.
+A simple non-puppeting bridge between Matrix and Discord written in Python.
 
 ## Installation
 
@@ -16,7 +16,6 @@ NOTE: [Privileged Intents](https://discordpy.readthedocs.io/en/latest/intents.ht
 
 ## Known Issues
 
-* Random Discord message fails to be deleted on Matrix.
 * Discord messages lose their relation (if replying) to Matrix messages on being edited.
 
 ## What Works

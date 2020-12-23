@@ -16,7 +16,7 @@ NOTE: [Privileged Intents](https://discordpy.readthedocs.io/en/latest/intents.ht
 
 ## Known Issues
 
-* Discord messages lose their relation (if replying) to Matrix messages on being edited.
+* Messages lose their relation on being edited (replies).
 
 ## What Works
 

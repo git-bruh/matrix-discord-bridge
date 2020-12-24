@@ -80,10 +80,9 @@ class MatrixClient(nio.AsyncClient):
 
         if reply_id:
             reply_event = await self.room_get_event(
-                    room_id, reply_id
+                room_id, reply_id
             )
-
-            reply_event = reply_event.event.source["content"]["body"]
+            reply_event = reply_event.event
 
             content["m.relates_to"] = {
                 "m.in_reply_to": {"event_id": reply_id},
@@ -93,8 +92,8 @@ class MatrixClient(nio.AsyncClient):
 
             content["formatted_body"] = f"""<mx-reply><blockquote>
 <a href="https://matrix.to/#/{room_id}/{reply_id}">In reply to</a>
-<a href="https://matrix.to/#/{config["username"]}">{config["username"]}</a><br>
-{reply_event}</blockquote></mx-reply>{message}"""
+<a href="https://matrix.to/#/{reply_event.sender}">{reply_event.sender}</a><br>
+{reply_event.body}</blockquote></mx-reply>{message}"""
 
         if edit_id:
             content["body"] = f" * {message}"
@@ -202,9 +201,10 @@ class DiscordClient(discord.Client):
 
         content = await self.process_message(after)
 
-        await self.matrix_client.message_send(
-            content[0], after.channel.id, edit_id=message_store[before.id]
-        )
+        if before.id in message_store:
+            await self.matrix_client.message_send(
+                content[0], after.channel.id, edit_id=message_store[before.id]
+            )
 
     async def on_message_delete(self, message):
         if message.id in message_store:

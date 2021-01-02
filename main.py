@@ -1,3 +1,4 @@
+import discord.ext.commands
 import discord
 import json
 import logging
@@ -12,6 +13,7 @@ def config_gen(config_file):
         "username": "@name:matrix.org",
         "password": "my-secret-password",
         "token": "my-secret-token",
+        "discord_prefix": "my-command-prefix",
         "bridge": {"channel_id": "room_id", }
     }
 
@@ -143,7 +145,7 @@ class MatrixClient(nio.AsyncClient):
             self.logger.warning(f"Failed to send message {event_id}: {e}")
 
 
-class DiscordClient(discord.Client):
+class DiscordClient(discord.ext.commands.Bot):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -153,13 +155,21 @@ class DiscordClient(discord.Client):
 
         self.bg_task = self.loop.create_task(self.matrix_client.create(self))
 
-    async def on_ready(self):
-        print(f"Logged in as {self.user}")
+        self.add_cogs()
 
+    def add_cogs(self):
+        for cog in os.listdir("./cogs"):
+            if cog.endswith(".py"):
+                cog = f"cogs.{cog[:-3]}"
+                self.load_extension(cog)
+
+    async def on_ready(self):
         for channel in config["bridge"].keys():
             channel_store[channel] = self.get_channel(int(channel))
 
     async def on_message(self, message):
+        await self.process_commands(message)
+
         if message.author.bot or str(message.channel.id) not in \
                 config["bridge"].keys():
             return
@@ -372,13 +382,14 @@ class Callbacks(object):
 def main():
     logging.basicConfig(level=logging.INFO)
 
+    allowed_mentions = discord.AllowedMentions(everyone=False, roles=False)
+    command_prefix = config["discord_prefix"]
     intents = discord.Intents.default()
     intents.members = True
 
-    allowed_mentions = discord.AllowedMentions(everyone=False, roles=False)
-
     DiscordClient(
-        intents=intents, allowed_mentions=allowed_mentions
+        allowed_mentions=allowed_mentions,
+        command_prefix=command_prefix, intents=intents
     ).run(config["token"])
 
 

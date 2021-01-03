@@ -124,7 +124,7 @@ class MatrixClient(nio.AsyncClient):
         )
 
     async def webhook_send(self, author, avatar, message,
-                           event_id, channel_id):
+                           event_id, channel_id, embed=None):
         channel = channel_store[channel_id]
 
         # Create webhook if it doesn't exist
@@ -137,8 +137,10 @@ class MatrixClient(nio.AsyncClient):
         # Username must be between 1 and 80 characters in length
         # 'wait=True' allows us to store the sent message
         try:
-            hook = await hook.send(username=author[:80], avatar_url=avatar,
-                                   content=message, wait=True)
+            hook = await hook.send(
+                username=author[:80], avatar_url=avatar,
+                content=message, embed=embed, wait=True
+            )
             message_store[event_id] = hook
             message_store[hook.id] = event_id
         except discord.errors.HTTPException as e:
@@ -301,14 +303,16 @@ class Callbacks(object):
 
         message = await self.process_message(message, channel_id)
 
+        embed = None
         # Get attachments
         try:
             attachment = event.url.split("/")[-1]
+            attachment = f"{url}/{homeserver}/{attachment}"
 
-            # Highlight attachment name
-            message = f"`{message}`"
+            embed = discord.Embed(colour=discord.Colour.blue(), title=message)
+            embed.set_image(url=attachment)
 
-            message += f"\n{url}/{homeserver}/{attachment}"
+            message = None
         except AttributeError:
             pass
 
@@ -321,7 +325,7 @@ class Callbacks(object):
                     break
 
         await self.matrix_client.webhook_send(
-            author, avatar, message, event.event_id, channel_id
+            author, avatar, message, event.event_id, channel_id, embed=embed
         )
 
     async def redaction_callback(self, room, event):

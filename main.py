@@ -175,8 +175,7 @@ class DiscordClient(discord.ext.commands.Bot):
     async def on_message(self, message):
         await self.process_commands(message)
 
-        if self.to_return(message.channel.id, message.author) \
-                or not message.content:
+        if self.to_return(message.channel.id, message.author):
             return
 
         content = await self.process_message(message)

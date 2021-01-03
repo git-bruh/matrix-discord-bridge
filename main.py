@@ -35,7 +35,7 @@ message_store, channel_store = {}, {}
 
 
 class MatrixClient(nio.AsyncClient):
-    async def create(self, discord_client):
+    async def start(self, discord_client):
         self.logger = logging.getLogger("matrix_logger")
 
         password = config["password"]
@@ -153,7 +153,7 @@ class DiscordClient(discord.ext.commands.Bot):
             config["homeserver"], config["username"]
         )
 
-        self.bg_task = self.loop.create_task(self.matrix_client.create(self))
+        self.bg_task = self.loop.create_task(self.matrix_client.start(self))
 
         self.add_cogs()
 
@@ -163,6 +163,11 @@ class DiscordClient(discord.ext.commands.Bot):
                 cog = f"cogs.{cog[:-3]}"
                 self.load_extension(cog)
 
+    def to_return(self, channel_id, user):
+        if user.discriminator == "0000" \
+                or str(channel_id) not in config["bridge"].keys():
+            return True
+
     async def on_ready(self):
         for channel in config["bridge"].keys():
             channel_store[channel] = self.get_channel(int(channel))
@@ -170,8 +175,7 @@ class DiscordClient(discord.ext.commands.Bot):
     async def on_message(self, message):
         await self.process_commands(message)
 
-        if message.author.bot or str(message.channel.id) not in \
-                config["bridge"].keys():
+        if self.to_return(message.channel.id, message.author):
             return
 
         content = await self.process_message(message)
@@ -183,8 +187,7 @@ class DiscordClient(discord.ext.commands.Bot):
         message_store[message.id] = matrix_message
 
     async def on_message_edit(self, before, after):
-        if after.author.bot or str(after.channel.id) not in \
-                config["bridge"].keys():
+        if self.to_return(after.channel.id, after.author):
             return
 
         content = await self.process_message(after)
@@ -201,8 +204,7 @@ class DiscordClient(discord.ext.commands.Bot):
             )
 
     async def on_typing(self, channel, user, when):
-        if user.bot or str(channel.id) not in \
-                config["bridge"].keys():
+        if self.to_return(channel.id, user) or user == self.user:
             return
 
         # Send typing event
@@ -247,15 +249,15 @@ class Callbacks(object):
 
         return channel_id
 
-    async def message_callback(self, room, event):
-        # Ignore messages from ourselves or other rooms
+    def to_return(self, room, event):
         if room.room_id not in config["bridge"].values() or \
                 event.sender == self.matrix_client.user:
-            return
+            return True
 
+    async def message_callback(self, room, event):
         message = event.body
 
-        if not message:
+        if self.to_return(room, event) or not message:
             return
 
         content_dict = event.source.get("content")
@@ -323,9 +325,7 @@ class Callbacks(object):
         )
 
     async def redaction_callback(self, room, event):
-        # Ignore messages from ourselves or other rooms
-        if room.room_id not in config["bridge"].values() or \
-                event.sender == self.matrix_client.user:
+        if self.to_return(room, event):
             return
 
         # Redact webhook message
@@ -340,21 +340,18 @@ class Callbacks(object):
             pass
 
     async def typing_callback(self, room, event):
-        # Ignore events from other rooms
-        if room.room_id not in config["bridge"].values():
+        if not room.typing_users \
+                or room.room_id not in config["bridge"].values():
             return
 
-        if room.typing_users:
-            # Ignore events from ourselves
-            if len(room.typing_users) == 1 \
-                    and room.typing_users[0] == self.matrix_client.user:
-                return
+        if len(room.typing_users) == 1 and \
+                self.matrix_client.user in room.typing_users:
+            return
 
-            channel_id = self.get_channel(room)
+        channel_id = self.get_channel(room)
 
-            # Send typing event
-            async with channel_store[channel_id].typing():
-                pass
+        async with channel_store[channel_id].typing():
+            return
 
     async def process_message(self, message, channel_id):
         mentions = re.findall(r"(^|\s)(@(\w*))", message)

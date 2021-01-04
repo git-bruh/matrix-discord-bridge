@@ -16,10 +16,6 @@ A simple non-puppeting bridge between Matrix and Discord written in Python.
 
 NOTE: [Privileged Intents](https://discordpy.readthedocs.io/en/latest/intents.html#privileged-intents) must be enabled for your Discord bot.
 
-## Known Issues
-
-* Messages lose their relation on being edited (replies).
-
 ## What Works
 
 - [x] Sending messages

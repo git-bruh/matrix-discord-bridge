@@ -282,7 +282,9 @@ class Callbacks(object):
 
                 try:
                     await webhook_message.edit(content=edited_content)
-                except discord.errors.NotFound as e:
+                except (
+                    discord.errors.NotFound, discord.errors.HTTPException
+                ) as e:
                     self.matrix_client.logger.warning(
                         f"Failed to edit message {edited_event}: {e}"
                     )
@@ -312,7 +314,7 @@ class Callbacks(object):
             embed = discord.Embed(colour=discord.Colour.blue(), title=message)
             embed.set_image(url=attachment)
 
-            message = None
+            message = attachment
         except AttributeError:
             pass
 

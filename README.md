@@ -26,3 +26,4 @@ NOTE: [Privileged Intents](https://discordpy.readthedocs.io/en/latest/intents.ht
 - [x] Editing messages
 - [x] Replies
 - [x] Bridging multiple channels/rooms
+- [x] Discord emotes bridged as inline images (Works on Element Web, Fluffychat)

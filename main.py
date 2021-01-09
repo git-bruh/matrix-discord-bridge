@@ -1,5 +1,7 @@
-import discord.ext.commands
+import aiofiles
+import aiohttp
 import discord
+import discord.ext.commands
 import json
 import logging
 import nio
@@ -70,15 +72,63 @@ class MatrixClient(nio.AsyncClient):
 
         await self.close()
 
-    async def message_send(self, message, channel_id,
+    async def process_emotes(self, message, emotes):
+        formatted_body = message
+
+        async def upload_emote(emote_name, emote_id):
+            emote_url = f"https://cdn.discordapp.com/emojis/{emote_id}"
+
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(emote_url) as resp:
+                        emote = await resp.read()
+                        content_type = resp.content_type
+            except Exception as e:
+                self.logger.warning(
+                    f"Failed to download emote {emote}: {e}"
+                )
+                return
+
+            async with aiofiles.open(emote_id, "wb") as f:
+                await f.write(emote)
+
+            try:
+                async with aiofiles.open(emote_id, "rb") as f:
+                    resp, maybe_keys = await self.upload(
+                        f, content_type=content_type
+                    )
+            except Exception as e:
+                self.logger.warning(
+                    f"Failed to upload emote {emote}: {e}"
+                )
+                return
+
+            return resp.content_uri
+
+        for emote in emotes.keys():
+            emote_ = await upload_emote(emote, emotes[emote])
+            if emote_:
+                emote = f":{emote}:"
+                formatted_body = formatted_body.replace(
+                    emote, f"""<img alt=\"{emote}\" title=\"{emote}\"\
+height=\"32\" src=\"{emote_}\" data-mx-emoticon />"""
+                )
+
+        return formatted_body
+
+    async def message_send(self, message, channel_id, emotes,
                            reply_id=None, edit_id=None):
         room_id = config["bridge"][str(channel_id)]
 
         content = {
-            "msgtype": "m.text",
-            "body": message,
+            "format": "org.matrix.custom.html",
+            "msgtype": "m.text"
         }
 
+        content["body"], content["formatted_body"] = message, await \
+            self.process_emotes(message, emotes)
+
+        '''
         if reply_id:
             reply_event = await self.room_get_event(
                 room_id, reply_id
@@ -91,10 +141,10 @@ class MatrixClient(nio.AsyncClient):
 
             content["format"] = "org.matrix.custom.html"
 
-            content["formatted_body"] = f"""<mx-reply><blockquote>
-<a href="https://matrix.to/#/{room_id}/{reply_id}">In reply to</a>
-<a href="https://matrix.to/#/{reply_event.sender}">{reply_event.sender}</a><br>
-{reply_event.body}</blockquote></mx-reply>{message}"""
+            content["formatted_body"] = f"""<mx-reply><blockquote>\
+<a href="https://matrix.to/#/{room_id}/{reply_id}">In reply to</a>\
+<a href="https://matrix.to/#/{reply_event.sender}">{reply_event.sender}</a>\
+<br>{reply_event.body}</blockquote></mx-reply>{message}"""
 
         if edit_id:
             content["body"] = f" * {message}"
@@ -108,6 +158,7 @@ class MatrixClient(nio.AsyncClient):
                     "event_id": edit_id,
                     "rel_type": "m.replace",
             }
+        '''
 
         message = await self.room_send(
             room_id=room_id,
@@ -183,7 +234,8 @@ class DiscordClient(discord.ext.commands.Bot):
         content = await self.process_message(message)
 
         matrix_message = await self.matrix_client.message_send(
-            content[0], message.channel.id, reply_id=content[1]
+            content[0], message.channel.id,
+            reply_id=content[1], emotes=content[2]
         )
 
         message_store[message.id] = matrix_message
@@ -196,7 +248,8 @@ class DiscordClient(discord.ext.commands.Bot):
 
         if before.id in message_store:
             await self.matrix_client.message_send(
-                content[0], after.channel.id, edit_id=message_store[before.id]
+                content[0], after.channel.id,
+                edit_id=message_store[before.id], emotes=content[2]
             )
 
     async def on_message_delete(self, message):
@@ -217,6 +270,11 @@ class DiscordClient(discord.ext.commands.Bot):
     async def process_message(self, message):
         content = message.clean_content
 
+        emotes = {}
+
+        for emote in re.findall(r"<a?:(\w+):(\d+)>", content):
+            emotes[emote[0]] = emote[1]
+
         replied_event = None
         if message.reference:
             replied_message = await message.channel.fetch_message(
@@ -236,7 +294,7 @@ class DiscordClient(discord.ext.commands.Bot):
 
         content = f"[{message.author.name}] {content}"
 
-        return content, replied_event
+        return content, replied_event, emotes
 
 
 class Callbacks(object):

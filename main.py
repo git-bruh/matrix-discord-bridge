@@ -277,9 +277,10 @@ class DiscordClient(discord.ext.commands.Bot):
     async def process_message(self, message):
         content = message.clean_content
 
+        regex = r"<a?:(\w+):(\d+)>"
         emotes = {}
 
-        for emote in re.findall(r"<a?:(\w+):(\d+)>", content):
+        for emote in re.findall(regex, content):
             emotes[emote[0]] = emote[1]
 
         replied_event = None
@@ -293,7 +294,7 @@ class DiscordClient(discord.ext.commands.Bot):
                 pass
 
         # Replace emote IDs with names
-        content = re.sub(r"<a?(:\w+:)\d*>", r"\g<1>", content)
+        content = re.sub(regex, r":\g<1>:", content)
 
         # Append attachments to message
         for attachment in message.attachments:

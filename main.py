@@ -16,7 +16,7 @@ def config_gen(config_file):
         "password": "my-secret-password",
         "token": "my-secret-token",
         "discord_prefix": "my-command-prefix",
-        "bridge": {"channel_id": "room_id", }
+        "bridge": {"channel_id": "room_id"}
     }
 
     if not os.path.exists(config_file):

@@ -119,7 +119,7 @@ class MatrixClient(nio.AsyncClient):
             if emote_:
                 emote = f":{emote}:"
                 formatted_body = formatted_body.replace(
-                    emote, f"""<img alt=\"{emote}\" title=\"{emote}\"\
+                    emote, f"""<img alt=\"{emote}\" title=\"{emote}\"
 height=\"32\" src=\"{emote_}\" data-mx-emoticon />"""
                 )
 

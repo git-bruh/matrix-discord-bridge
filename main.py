@@ -159,6 +159,8 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />"""
 
             content["m.new_content"] = {
                     "body": message,
+                    "formatted_body": content["formatted_body"],
+                    "format": "org.matrix.custom.html",
                     "msgtype": "m.text"
             }
 

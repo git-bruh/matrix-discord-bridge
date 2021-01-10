@@ -1,2 +1,2 @@
-git+git://github.com/rapptz/discord.py@c793737
+discord.py==1.6.0
 matrix-nio==0.15.2

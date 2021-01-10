@@ -1,4 +1,5 @@
 import aiofiles
+import aiofiles.os
 import aiohttp
 import discord
 import discord.ext.commands
@@ -7,6 +8,7 @@ import logging
 import nio
 import os
 import re
+import uuid
 
 
 def config_gen(config_file):
@@ -85,6 +87,8 @@ class MatrixClient(nio.AsyncClient):
 
             emote_url = f"https://cdn.discordapp.com/emojis/{emote_id}"
 
+            emote_file = f"/tmp/{str(uuid.uuid4())}"
+
             try:
                 async with aiohttp.ClientSession() as session:
                     async with session.get(emote_url) as resp:
@@ -96,11 +100,11 @@ class MatrixClient(nio.AsyncClient):
                 )
                 return
 
-            async with aiofiles.open(emote_id, "wb") as f:
+            async with aiofiles.open(emote_file, "wb") as f:
                 await f.write(emote)
 
             try:
-                async with aiofiles.open(emote_id, "rb") as f:
+                async with aiofiles.open(emote_file, "rb") as f:
                     resp, maybe_keys = await self.upload(
                         f, content_type=content_type
                     )
@@ -109,6 +113,8 @@ class MatrixClient(nio.AsyncClient):
                     f"Failed to upload emote {emote}: {e}"
                 )
                 return
+
+            await aiofiles.os.remove(emote_file)
 
             self.uploaded_emotes[emote_id] = resp.content_uri
 

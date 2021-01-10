@@ -37,9 +37,13 @@ message_store, channel_store = {}, {}
 
 
 class MatrixClient(nio.AsyncClient):
-    async def start(self, discord_client):
-        self.logger = logging.getLogger("matrix_logger")
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
+        self.logger = logging.getLogger("matrix_logger")
+        self.uploaded_emotes = {}
+
+    async def start(self, discord_client):
         password = config["password"]
         timeout = 30000
 
@@ -76,6 +80,9 @@ class MatrixClient(nio.AsyncClient):
         formatted_body = message
 
         async def upload_emote(emote_name, emote_id):
+            if emote_id in self.uploaded_emotes.keys():
+                return self.uploaded_emotes[emote_id]
+
             emote_url = f"https://cdn.discordapp.com/emojis/{emote_id}"
 
             try:
@@ -103,6 +110,8 @@ class MatrixClient(nio.AsyncClient):
                 )
                 return
 
+            self.uploaded_emotes[emote_id] = resp.content_uri
+
             return resp.content_uri
 
         for emote in emotes.keys():
@@ -128,7 +137,6 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />"""
         content["body"], content["formatted_body"] = message, await \
             self.process_emotes(message, emotes)
 
-        '''
         if reply_id:
             reply_event = await self.room_get_event(
                 room_id, reply_id
@@ -144,7 +152,7 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />"""
             content["formatted_body"] = f"""<mx-reply><blockquote>\
 <a href="https://matrix.to/#/{room_id}/{reply_id}">In reply to</a>\
 <a href="https://matrix.to/#/{reply_event.sender}">{reply_event.sender}</a>\
-<br>{reply_event.body}</blockquote></mx-reply>{message}"""
+<br>{reply_event.body}</blockquote></mx-reply>{content["formatted_body"]}"""
 
         if edit_id:
             content["body"] = f" * {message}"
@@ -158,7 +166,6 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />"""
                     "event_id": edit_id,
                     "rel_type": "m.replace",
             }
-        '''
 
         message = await self.room_send(
             room_id=room_id,

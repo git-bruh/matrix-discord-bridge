@@ -96,7 +96,7 @@ class MatrixClient(nio.AsyncClient):
                         content_type = resp.content_type
             except Exception as e:
                 self.logger.warning(
-                    f"Failed to download emote {emote}: {e}"
+                    f"Failed to download emote {emote_id}: {e}"
                 )
                 return
 
@@ -110,7 +110,7 @@ class MatrixClient(nio.AsyncClient):
                     )
             except Exception as e:
                 self.logger.warning(
-                    f"Failed to upload emote {emote}: {e}"
+                    f"Failed to upload emote {emote_id}: {e}"
                 )
                 return
 

@@ -140,8 +140,8 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />"""
             "msgtype": "m.text"
         }
 
-        content["body"], content["formatted_body"] = message, await \
-            self.process_emotes(message, emotes)
+        content["body"], content["formatted_body"] = message, \
+            await self.process_emotes(message, emotes)
 
         if reply_id:
             reply_event = await self.room_get_event(
@@ -153,21 +153,19 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />"""
                 "m.in_reply_to": {"event_id": reply_id},
             }
 
-            content["format"] = "org.matrix.custom.html"
-
             content["formatted_body"] = f"""<mx-reply><blockquote>\
 <a href="https://matrix.to/#/{room_id}/{reply_id}">In reply to</a>\
 <a href="https://matrix.to/#/{reply_event.sender}">{reply_event.sender}</a>\
 <br>{reply_event.body}</blockquote></mx-reply>{content["formatted_body"]}"""
 
         if edit_id:
-            content["body"] = f" * {message}"
+            content["body"] = f" * {content['body']}"
 
             content["m.new_content"] = {
-                    "body": message,
+                    "body": content["body"],
                     "formatted_body": content["formatted_body"],
-                    "format": "org.matrix.custom.html",
-                    "msgtype": "m.text"
+                    "format": content["format"],
+                    "msgtype": content["msgtype"]
             }
 
             content["m.relates_to"] = {
@@ -193,9 +191,11 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />"""
                            event_id, channel_id, embed=None):
         channel = channel_store[channel_id]
 
-        # Create webhook if it doesn't exist
         hook_name = "matrix_bridge"
+
         hooks = await channel.webhooks()
+
+        # Create webhook if it doesn't exist
         hook = discord.utils.get(hooks, name=hook_name)
         if not hook:
             hook = await channel.create_webhook(name=hook_name)
@@ -207,6 +207,7 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />"""
                 username=author[:80], avatar_url=avatar,
                 content=message, embed=embed, wait=True
             )
+
             message_store[event_id] = hook
             message_store[hook.id] = event_id
         except discord.errors.HTTPException as e:
@@ -380,6 +381,7 @@ class Callbacks(object):
         message = await self.process_message(message, channel_id)
 
         embed = None
+
         # Get attachments
         try:
             attachment = event.url.split("/")[-1]

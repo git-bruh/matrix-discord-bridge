@@ -1,14 +1,15 @@
+import json
+import logging
+import os
+import re
+import sys
+import uuid
 import aiofiles
 import aiofiles.os
 import aiohttp
 import discord
 import discord.ext.commands
-import json
-import logging
 import nio
-import os
-import re
-import uuid
 
 
 def config_gen(config_file):
@@ -25,7 +26,7 @@ def config_gen(config_file):
         with open(config_file, "w") as f:
             json.dump(config_dict, f, indent=4)
             print(f"Example configuration dumped to {config_file}")
-            exit()
+            sys.exit()
 
     with open(config_file, "r") as f:
         config = json.loads(f.read())
@@ -81,7 +82,7 @@ class MatrixClient(nio.AsyncClient):
     async def process_emotes(self, message, emotes):
         formatted_body = message
 
-        async def upload_emote(emote_name, emote_id):
+        async def upload_emote(emote_id):
             if emote_id in self.uploaded_emotes.keys():
                 return self.uploaded_emotes[emote_id]
 
@@ -89,39 +90,33 @@ class MatrixClient(nio.AsyncClient):
 
             emote_file = f"/tmp/{str(uuid.uuid4())}"
 
-            try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(emote_url) as resp:
-                        emote = await resp.read()
-                        content_type = resp.content_type
-            except Exception as e:
-                self.logger.warning(
-                    f"Failed to download emote {emote_id}: {e}"
-                )
-                return
+            async with aiohttp.ClientSession() as session:
+                async with session.get(emote_url) as resp:
+                    emote = await resp.read()
+                    content_type = resp.content_type
 
             async with aiofiles.open(emote_file, "wb") as f:
                 await f.write(emote)
 
-            try:
-                async with aiofiles.open(emote_file, "rb") as f:
-                    resp, maybe_keys = await self.upload(
-                        f, content_type=content_type
-                    )
-            except Exception as e:
-                self.logger.warning(
-                    f"Failed to upload emote {emote_id}: {e}"
+            async with aiofiles.open(emote_file, "rb") as f:
+                resp, maybe_keys = await self.upload(
+                    f, content_type=content_type
                 )
-                return
 
             await aiofiles.os.remove(emote_file)
+
+            if type(resp) != nio.UploadResponse:
+                self.logger.warning(
+                    f"Failed to upload emote {emote_id}"
+                )
+                return
 
             self.uploaded_emotes[emote_id] = resp.content_uri
 
             return resp.content_uri
 
         for emote in emotes.keys():
-            emote_ = await upload_emote(emote, emotes[emote])
+            emote_ = await upload_emote(emotes[emote])
             if emote_:
                 emote = f":{emote}:"
                 formatted_body = formatted_body.replace(
@@ -136,12 +131,11 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />"""
         room_id = config["bridge"][str(channel_id)]
 
         content = {
+            "body": message,
             "format": "org.matrix.custom.html",
+            "formatted_body": await self.process_emotes(message, emotes),
             "msgtype": "m.text"
         }
-
-        content["body"], content["formatted_body"] = message, \
-            await self.process_emotes(message, emotes)
 
         if reply_id:
             reply_event = await self.room_get_event(
@@ -149,9 +143,7 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />"""
             )
             reply_event = reply_event.event
 
-            content["m.relates_to"] = {
-                "m.in_reply_to": {"event_id": reply_id},
-            }
+            content["m.relates_to"] = {"m.in_reply_to": {"event_id": reply_id}}
 
             content["formatted_body"] = f"""<mx-reply><blockquote>\
 <a href="https://matrix.to/#/{room_id}/{reply_id}">In reply to</a>\
@@ -161,16 +153,15 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />"""
         if edit_id:
             content["body"] = f" * {content['body']}"
 
+            content["m.relates_to"] = {
+                "event_id": edit_id, "rel_type": "m.replace"
+            }
+
             content["m.new_content"] = {
                     "body": content["body"],
                     "formatted_body": content["formatted_body"],
                     "format": content["format"],
                     "msgtype": content["msgtype"]
-            }
-
-            content["m.relates_to"] = {
-                    "event_id": edit_id,
-                    "rel_type": "m.replace",
             }
 
         message = await self.room_send(

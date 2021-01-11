@@ -79,52 +79,60 @@ class MatrixClient(nio.AsyncClient):
 
         await self.close()
 
-    async def process_emotes(self, message, emotes):
-        formatted_body = message
+    async def upload_emote(self, emote_id):
+        if emote_id in self.uploaded_emotes.keys():
+            return self.uploaded_emotes[emote_id]
 
-        async def upload_emote(emote_id):
-            if emote_id in self.uploaded_emotes.keys():
-                return self.uploaded_emotes[emote_id]
+        emote_url = f"https://cdn.discordapp.com/emojis/{emote_id}"
 
-            emote_url = f"https://cdn.discordapp.com/emojis/{emote_id}"
+        emote_file = f"/tmp/{str(uuid.uuid4())}"
 
-            emote_file = f"/tmp/{str(uuid.uuid4())}"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(emote_url) as resp:
+                emote = await resp.read()
+                content_type = resp.content_type
 
-            async with aiohttp.ClientSession() as session:
-                async with session.get(emote_url) as resp:
-                    emote = await resp.read()
-                    content_type = resp.content_type
+        async with aiofiles.open(emote_file, "wb") as f:
+            await f.write(emote)
 
-            async with aiofiles.open(emote_file, "wb") as f:
-                await f.write(emote)
+        async with aiofiles.open(emote_file, "rb") as f:
+            resp, maybe_keys = await self.upload(
+                f, content_type=content_type
+            )
 
-            async with aiofiles.open(emote_file, "rb") as f:
-                resp, maybe_keys = await self.upload(
-                    f, content_type=content_type
-                )
+        await aiofiles.os.remove(emote_file)
 
-            await aiofiles.os.remove(emote_file)
+        if type(resp) != nio.UploadResponse:
+            self.logger.warning(
+                f"Failed to upload emote {emote_id}"
+            )
+            return
 
-            if type(resp) != nio.UploadResponse:
-                self.logger.warning(
-                    f"Failed to upload emote {emote_id}"
-                )
-                return
+        self.uploaded_emotes[emote_id] = resp.content_uri
 
-            self.uploaded_emotes[emote_id] = resp.content_uri
+        return resp.content_uri
 
-            return resp.content_uri
+    async def get_fmt_body(self, body, emotes):
+        # Markdown code blocks
+        replace = "```"
+        for i in range(body.count(replace)):
+            i += 1
+
+            if i % 2:
+                body = body.replace(replace, "<pre><code>", 1)
+            else:
+                body = body.replace(replace, "</code></pre>", 1)
 
         for emote in emotes.keys():
-            emote_ = await upload_emote(emotes[emote])
+            emote_ = await self.upload_emote(emotes[emote])
             if emote_:
                 emote = f":{emote}:"
-                formatted_body = formatted_body.replace(
+                body = body.replace(
                     emote, f"""<img alt=\"{emote}\" title=\"{emote}\"
 height=\"32\" src=\"{emote_}\" data-mx-emoticon />"""
                 )
 
-        return formatted_body
+        return body
 
     async def message_send(self, message, channel_id, emotes,
                            reply_id=None, edit_id=None):
@@ -133,7 +141,7 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />"""
         content = {
             "body": message,
             "format": "org.matrix.custom.html",
-            "formatted_body": await self.process_emotes(message, emotes),
+            "formatted_body": await self.get_fmt_body(message, emotes),
             "msgtype": "m.text"
         }
 

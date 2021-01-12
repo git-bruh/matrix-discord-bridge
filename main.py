@@ -113,6 +113,12 @@ class MatrixClient(nio.AsyncClient):
         return resp.content_uri
 
     async def get_fmt_body(self, body, emotes):
+        # Send larger emojis if there is no other content in message
+        if len(body.split("]")[1].split()) == 1:
+            emote_size = "64"
+        else:
+            emote_size = "32"
+
         # Markdown code blocks
         replace = "```"
         for i in range(body.count(replace)):
@@ -128,8 +134,8 @@ class MatrixClient(nio.AsyncClient):
             if emote_:
                 emote = f":{emote}:"
                 body = body.replace(
-                    emote, f"""<img alt=\"{emote}\" title=\"{emote}\"
-height=\"32\" src=\"{emote_}\" data-mx-emoticon />"""
+                    emote, f"""<img alt=\"{emote}\" title=\"{emote}\" \
+height=\"{emote_size}\" src=\"{emote_}\" data-mx-emoticon />"""
                 )
 
         return body

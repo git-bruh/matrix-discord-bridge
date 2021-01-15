@@ -113,15 +113,21 @@ class MatrixClient(nio.AsyncClient):
         return resp.content_uri
 
     async def get_fmt_body(self, body, emotes):
-        # Markdown code blocks
-        replace = "```"
-        for i in range(body.count(replace)):
-            i += 1
+        replace_ = [
+                # Code blocks
+                ("```", "<pre><code>", "</code></pre>"),
+                # Spoilers
+                ("||", "<span data-mx-spoiler>", "</span>")
+            ]
 
-            if i % 2:
-                body = body.replace(replace, "<pre><code>", 1)
-            else:
-                body = body.replace(replace, "</code></pre>", 1)
+        for replace in replace_:
+            for i in range(body.count(replace[0])):
+                i += 1
+
+                if i % 2:
+                    body = body.replace(replace[0], replace[1], 1)
+                else:
+                    body = body.replace(replace[0], replace[2], 1)
 
         for emote in emotes.keys():
             emote_ = await self.upload_emote(emotes[emote])

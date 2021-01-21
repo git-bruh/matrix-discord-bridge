@@ -229,7 +229,9 @@ class DiscordClient(discord.ext.commands.Bot):
             config["homeserver"], config["username"]
         )
 
-        self.bg_task = self.loop.create_task(self.matrix_client.start(self))
+        self.bg_task = self.loop.create_task(
+            self.log_exceptions(self.matrix_client)
+        )
 
         self.add_cogs()
 
@@ -243,6 +245,14 @@ class DiscordClient(discord.ext.commands.Bot):
         if user.discriminator == "0000" \
                 or str(channel_id) not in config["bridge"].keys():
             return True
+
+    async def log_exceptions(self, matrix_client):
+        try:
+            return await matrix_client.start(self)
+        except Exception as e:
+            matrix_client.logger.warning(f"Unknown exception occurred: {e}")
+
+        await matrix_client.close()
 
     async def on_ready(self):
         for channel in config["bridge"].keys():

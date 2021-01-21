@@ -314,7 +314,7 @@ class DiscordClient(discord.ext.commands.Bot):
         for attachment in message.attachments:
             content += f"\n{attachment.url}"
 
-        content = f"[{message.author.name}] {content}"
+        content = f"[{message.author.display_name}] {content}"
 
         return content, replied_event, emotes
 
@@ -346,7 +346,7 @@ class Callbacks(object):
 
         channel_id = self.get_channel(room)
 
-        author = event.sender.split(":")[0][1:]
+        author = room.user_name(event.sender)
         avatar = None
 
         homeserver = event.sender.split(":")[-1]

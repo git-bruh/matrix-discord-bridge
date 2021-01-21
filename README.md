@@ -14,6 +14,8 @@ A simple non-puppeting bridge between Matrix and Discord written in Python.
 
 * Normal Discord bot functionality like commands can be added to the bot via [cogs](https://discordpy.readthedocs.io/en/latest/ext/commands/cogs.html), example [here](https://gist.github.com/EvieePy/d78c061a4798ae81be9825468fe146be).
 
+* Apply `use_client_emojis.patch` to make the Discord bot use emojis from all it's servers.
+
 NOTE: [Privileged Intents](https://discordpy.readthedocs.io/en/latest/intents.html#privileged-intents) must be enabled for your Discord bot.
 
 ## What Works

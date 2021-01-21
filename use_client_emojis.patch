@@ -1,0 +1,35 @@
+diff --git a/main.py b/main.py
+index 53dc289..9acbb43 100644
+--- a/main.py
++++ b/main.py
+@@ -56,7 +56,7 @@ class MatrixClient(nio.AsyncClient):
+         await self.sync(timeout)
+ 
+         # Set up event callbacks
+-        callbacks = Callbacks(self)
++        callbacks = Callbacks(self, discord_client)
+ 
+         self.add_event_callback(
+             callbacks.message_callback,
+@@ -320,8 +320,9 @@ class DiscordClient(discord.ext.commands.Bot):
+ 
+ 
+ class Callbacks(object):
+-    def __init__(self, matrix_client):
++    def __init__(self, matrix_client, discord_client):
+         self.matrix_client = matrix_client
++        self.discord_client = discord_client
+ 
+     def get_channel(self, room):
+         channel_id = next(
+@@ -450,7 +451,9 @@ class Callbacks(object):
+         for emote in emotes:
+             if emote not in added_emotes:
+                 added_emotes.append(emote)
+-                emote_ = discord.utils.get(guild.emojis, name=emote)
++                emote_ = discord.utils.get(
++                    self.discord_client.emojis, name=emote
++                )
+                 if emote_:
+                     message = message.replace(f":{emote}:", str(emote_))
+ 

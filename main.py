@@ -117,7 +117,9 @@ class MatrixClient(nio.AsyncClient):
                 # Code blocks
                 ("```", "<pre><code>", "</code></pre>"),
                 # Spoilers
-                ("||", "<span data-mx-spoiler>", "</span>")
+                ("||", "<span data-mx-spoiler>", "</span>"),
+                # Strikethrough
+                ("~~", "<del>", "</del>")
             ]
 
         for replace in replace_:

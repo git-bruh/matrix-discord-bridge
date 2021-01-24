@@ -337,6 +337,10 @@ class DiscordClient(discord.ext.commands.Bot):
         # Replace emote IDs with names.
         content = re.sub(regex, r":\g<1>:", content)
 
+        # Escape stuff
+        for replace in ("<", ">"):
+            content = content.replace(replace, f"\{replace}")
+
         # Append attachments to message.
         for attachment in message.attachments:
             content += f"\n{attachment.url}"

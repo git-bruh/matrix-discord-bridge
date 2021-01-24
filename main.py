@@ -339,7 +339,7 @@ class DiscordClient(discord.ext.commands.Bot):
 
         # Escape stuff
         for replace in ("<", ">"):
-            content = content.replace(replace, f"\{replace}")
+            content = content.replace(replace, f"\\{replace}")
 
         # Append attachments to message.
         for attachment in message.attachments:

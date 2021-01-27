@@ -1,7 +1,9 @@
+import asyncio
 import json
 import logging
 import os
 import re
+import traceback
 import sys
 import uuid
 import aiofiles
@@ -36,17 +38,22 @@ def config_gen(config_file):
 
 config = config_gen("config.json")
 
-message_store, channel_store = {}, {}
+message_store = {}
 
 
 class MatrixClient(nio.AsyncClient):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, discord_client, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
         self.logger = logging.getLogger("matrix_logger")
+
+        self.discord_client = discord_client
+
+        self.ready = asyncio.Event()
+
         self.uploaded_emotes = {}
 
-    async def start(self, discord_client):
+    async def start(self):
         password = config["password"]
         timeout = 30000
 
@@ -56,8 +63,9 @@ class MatrixClient(nio.AsyncClient):
         await self.sync(timeout)
 
         # Set up event callbacks after syncing once to ignore old messages.
-        callbacks = Callbacks(self)
+        callbacks = Callbacks(self.discord_client, self)
 
+        self.logger.info("Adding callbacks.")
         self.add_event_callback(
             callbacks.message_callback,
             (nio.RoomMessageText, nio.RoomMessageMedia,
@@ -72,8 +80,10 @@ class MatrixClient(nio.AsyncClient):
             callbacks.typing_callback, nio.EphemeralEvent
         )
 
-        # Wait for Discord client...
-        await discord_client.wait_until_ready()
+        await self.discord_client.ready.wait()
+        self.ready.set()
+
+        self.logger.info("Clients ready.")
 
         self.logger.info("Syncing forever.")
         await self.sync_forever(timeout=timeout)
@@ -199,7 +209,7 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />"""
 
     async def webhook_send(self, author, avatar, message,
                            event_id, channel_id, embed=None):
-        channel = channel_store[channel_id]
+        channel = self.discord_client.channel_store[channel_id]
 
         hook_name = "matrix_bridge"
 
@@ -228,15 +238,19 @@ class DiscordClient(discord.ext.commands.Bot):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
+        self.channel_store = {}
+
+        self.ready = asyncio.Event()
+
+        self.add_cogs()
+
         self.matrix_client = MatrixClient(
-            config["homeserver"], config["username"]
+            self, config["homeserver"], config["username"]
         )
 
         self.bg_task = self.loop.create_task(
             self.log_exceptions(self.matrix_client)
         )
-
-        self.add_cogs()
 
     def add_cogs(self):
         cogs_dir = "./cogs"
@@ -249,28 +263,34 @@ class DiscordClient(discord.ext.commands.Bot):
                 cog = f"cogs.{cog[:-3]}"
                 self.load_extension(cog)
 
-    def to_return(self, channel_id, user):
+    async def to_return(self, channel_id, user):
+        await self.matrix_client.ready.wait()
+
         if user.discriminator == "0000" \
                 or str(channel_id) not in config["bridge"].keys():
             return True
 
     async def log_exceptions(self, matrix_client):
         try:
-            return await matrix_client.start(self)
-        except Exception as e:
-            matrix_client.logger.warning(f"Unknown exception occurred: {e}")
+            return await matrix_client.start()
+        except Exception:
+            matrix_client.logger.warning(
+                f"Unknown exception occurred\n{traceback.format_exc()}"
+            )
 
         await matrix_client.close()
 
     async def on_ready(self):
         for channel in config["bridge"].keys():
-            channel_store[channel] = self.get_channel(int(channel))
+            self.channel_store[channel] = self.get_channel(int(channel))
+
+        self.ready.set()
 
     async def on_message(self, message):
         # Process other stuff like cogs before ignoring the message.
         await self.process_commands(message)
 
-        if self.to_return(message.channel.id, message.author):
+        if await self.to_return(message.channel.id, message.author):
             return
 
         content = await self.process_message(message)
@@ -283,7 +303,7 @@ class DiscordClient(discord.ext.commands.Bot):
         message_store[message.id] = matrix_message
 
     async def on_message_edit(self, before, after):
-        if self.to_return(after.channel.id, after.author):
+        if await self.to_return(after.channel.id, after.author):
             return
 
         content = await self.process_message(after)
@@ -303,7 +323,7 @@ class DiscordClient(discord.ext.commands.Bot):
             )
 
     async def on_typing(self, channel, user, when):
-        if self.to_return(channel.id, user) or user == self.user:
+        if await self.to_return(channel.id, user) or user == self.user:
             return
 
         # Send typing event
@@ -351,7 +371,8 @@ class DiscordClient(discord.ext.commands.Bot):
 
 
 class Callbacks(object):
-    def __init__(self, matrix_client):
+    def __init__(self, discord_client, matrix_client):
+        self.discord_client = discord_client
         self.matrix_client = matrix_client
 
     def get_channel(self, room):
@@ -484,7 +505,7 @@ class Callbacks(object):
         channel_id = self.get_channel(room)
 
         # Send typing event.
-        async with channel_store[channel_id].typing():
+        async with self.discord_client.channel_store[channel_id].typing():
             return
 
     async def process_message(self, message, channel_id):
@@ -492,7 +513,7 @@ class Callbacks(object):
         emotes = re.findall(r":(\w*):", message)
 
         # Get the guild from channel ID.
-        guild = channel_store[channel_id].guild
+        guild = self.discord_client.channel_store[channel_id].guild
 
         added_emotes = []
         for emote in emotes:

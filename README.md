@@ -47,4 +47,5 @@ NOTE: [Privileged Intents](https://discordpy.readthedocs.io/en/latest/intents.ht
 - [x] Editing messages
 - [x] Replies
 - [x] Bridging multiple channels/rooms
+- [x] `:emote:` in Matrix message converted to Discord emotes
 - [x] Discord emotes bridged as inline images (Works on Element Web, Fluffychat)

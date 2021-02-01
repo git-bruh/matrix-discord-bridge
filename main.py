@@ -42,30 +42,40 @@ message_store = {}
 
 
 class MatrixClient(nio.AsyncClient):
-    def __init__(self, discord_client, *args, **kwargs):
+    def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
         self.logger = logging.getLogger("matrix_logger")
 
-        self.discord_client = discord_client
-
-        self.ready = asyncio.Event()
-
+        self.listen = False
         self.uploaded_emotes = {}
+        self.ready = asyncio.Event()
+        self.loop = asyncio.get_event_loop()
 
-    async def start(self):
-        password = config["password"]
-        timeout = 30000
+        self.start_discord()
+        self.add_callbacks()
 
-        self.logger.info(await self.login(password))
+    def start_discord(self):
+        # Disable everyone and role mentions.
+        allowed_mentions = discord.AllowedMentions(everyone=False, roles=False)
+        # Set command prefix for Discord bot.
+        command_prefix = config["discord_prefix"]
+        # Intents to fetch members from guild.
+        intents = discord.Intents.default()
+        intents.members = True
 
-        self.logger.info("Doing initial sync.")
-        await self.sync(timeout)
+        self.discord_client = DiscordClient(
+            self, allowed_mentions=allowed_mentions,
+            command_prefix=command_prefix, intents=intents
+        )
 
-        # Set up event callbacks after syncing once to ignore old messages.
+        self.bg_task = self.loop.create_task(
+            self.discord_client.start(config["token"])
+        )
+
+    def add_callbacks(self):
         callbacks = Callbacks(self.discord_client, self)
 
-        self.logger.info("Adding callbacks.")
         self.add_event_callback(
             callbacks.message_callback,
             (nio.RoomMessageText, nio.RoomMessageMedia,
@@ -79,18 +89,6 @@ class MatrixClient(nio.AsyncClient):
         self.add_ephemeral_callback(
             callbacks.typing_callback, nio.EphemeralEvent
         )
-
-        await self.discord_client.ready.wait()
-        self.ready.set()
-
-        self.logger.info("Clients ready.")
-
-        self.logger.info("Syncing forever.")
-        await self.sync_forever(timeout=timeout)
-
-        # Logout
-        await self.logout()
-        await self.close()
 
     async def upload_emote(self, emote_id):
         if emote_id in self.uploaded_emotes.keys():
@@ -235,7 +233,7 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />"""
 
 
 class DiscordClient(discord.ext.commands.Bot):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, matrix_client, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
         self.channel_store = {}
@@ -244,13 +242,7 @@ class DiscordClient(discord.ext.commands.Bot):
 
         self.add_cogs()
 
-        self.matrix_client = MatrixClient(
-            self, config["homeserver"], config["username"]
-        )
-
-        self.bg_task = self.loop.create_task(
-            self.log_exceptions(self.matrix_client)
-        )
+        self.matrix_client = matrix_client
 
     def add_cogs(self):
         cogs_dir = "./cogs"
@@ -269,16 +261,6 @@ class DiscordClient(discord.ext.commands.Bot):
         if user.discriminator == "0000" \
                 or str(channel_id) not in config["bridge"].keys():
             return True
-
-    async def log_exceptions(self, matrix_client):
-        try:
-            return await matrix_client.start()
-        except Exception:
-            matrix_client.logger.warning(
-                f"Unknown exception occurred\n{traceback.format_exc()}"
-            )
-
-        await matrix_client.close()
 
     async def on_ready(self):
         for channel in config["bridge"].keys():
@@ -383,16 +365,19 @@ class Callbacks(object):
 
         return channel_id
 
-    def to_return(self, room, event):
+    async def to_return(self, room, event):
+        await self.matrix_client.discord_client.ready.wait()
+
         if room.room_id not in config["bridge"].values() or \
-                event.sender == self.matrix_client.user:
+                event.sender == self.matrix_client.user or \
+                not self.matrix_client.listen:
             return True
 
     async def message_callback(self, room, event):
         message = event.body
 
         # Ignore messages having an empty body.
-        if self.to_return(room, event) or not message:
+        if await self.to_return(room, event) or not message:
             return
 
         content_dict = event.source.get("content")
@@ -476,7 +461,7 @@ class Callbacks(object):
         )
 
     async def redaction_callback(self, room, event):
-        if self.to_return(room, event):
+        if await self.to_return(room, event):
             return
 
         # Try to fetch the message from cache.
@@ -538,23 +523,57 @@ class Callbacks(object):
         return message
 
 
-def main():
+async def main():
     logging.basicConfig(level=logging.INFO)
 
-    # Disable everyone and role mentions.
-    allowed_mentions = discord.AllowedMentions(everyone=False, roles=False)
-    # Set command prefix for Discord bot.
-    command_prefix = config["discord_prefix"]
-    # Intents to fetch members from guild.
-    intents = discord.Intents.default()
-    intents.members = True
+    retry = 2
 
-    # Start Discord bot.
-    DiscordClient(
-        allowed_mentions=allowed_mentions,
-        command_prefix=command_prefix, intents=intents
-    ).run(config["token"])
+    matrix_client = MatrixClient(
+        config["homeserver"], config["username"]
+    )
 
+    while True:
+        resp = await matrix_client.login(config["password"])
+
+        if type(resp) == nio.LoginError:
+            matrix_client.logger.error(f"Failed to login: {resp}")
+            return False
+
+        # Login successful.
+        matrix_client.logger.info(resp)
+
+        try:
+            await matrix_client.sync(full_state=True)
+        except Exception:
+            matrix_client.logger.error(
+                f"Initial sync failed!\n{traceback.format_exc()}"
+            )
+            return False
+
+        try:
+            matrix_client.ready.set()
+            matrix_client.listen = True
+
+            matrix_client.logger.info("Clients ready!")
+
+            await matrix_client.sync_forever(timeout=30000, full_state=True)
+        except Exception:
+            matrix_client.logger.error(
+                f"Unknown exception occured\n{traceback.format_exc()}\n"
+                f"Retrying in {retry} seconds..."
+            )
+
+            # Clear "ready" status.
+            matrix_client.ready.clear()
+
+            await matrix_client.close()
+            await asyncio.sleep(retry)
+
+            matrix_client.listen = False
+        finally:
+            if matrix_client.listen:
+                await matrix_client.close()
+                return False
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

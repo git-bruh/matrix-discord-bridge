@@ -232,7 +232,7 @@ class DiscordClient(discord.ext.commands.Bot):
 
         self.channel_store = {}
 
-        self.webhook_ids = []
+        self.webhook_ids = set()
 
         self.ready = asyncio.Event()
 
@@ -261,7 +261,7 @@ class DiscordClient(discord.ext.commands.Bot):
         if not hook:
             hook = await channel.create_webhook(name=hook_name)
 
-        self.webhook_ids.append(hook.id)
+        self.webhook_ids.add(hook.id)
 
         return hook
 

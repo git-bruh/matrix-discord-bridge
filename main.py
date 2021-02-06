@@ -524,7 +524,13 @@ class Callbacks(object):
 
 
 async def main():
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(
+        level=logging.INFO,
+        handlers=[
+            logging.FileHandler("bot.log"),
+            logging.StreamHandler()
+        ]
+    )
 
     retry = 2
 

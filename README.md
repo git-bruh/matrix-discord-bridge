@@ -26,6 +26,8 @@ A simple non-puppeting bridge between Matrix and Discord written in Python.
 }
 ```
 
+* Logs are saved to the `bot.log` file in `$PWD`.
+
 * Normal Discord bot functionality like commands can be added to the bot via [cogs](https://discordpy.readthedocs.io/en/latest/ext/commands/cogs.html), example [here](https://gist.github.com/EvieePy/d78c061a4798ae81be9825468fe146be).
 
 * Replace `guild.emojis` with `self.discord_client.emojis` (`Callbacks()`, `process_message()`) to make the Discord bot use emojis from ALL it's guilds.

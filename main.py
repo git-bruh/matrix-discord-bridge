@@ -209,14 +209,8 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />"""
                            event_id, channel_id, embed=None):
         channel = self.discord_client.channel_store[channel_id]
 
-        hook_name = "matrix_bridge"
-
-        hooks = await channel.webhooks()
-
-        # Create webhook if it doesn't exist.
-        hook = discord.utils.get(hooks, name=hook_name)
-        if not hook:
-            hook = await channel.create_webhook(name=hook_name)
+        # Recreate hook if it was deleted.
+        hook = await self.discord_client.hook_create(channel)
 
         # Username must be between 1 and 80 characters in length,
         # 'wait=True' allows us to store the sent message.
@@ -238,6 +232,8 @@ class DiscordClient(discord.ext.commands.Bot):
 
         self.channel_store = {}
 
+        self.webhook_ids = []
+
         self.ready = asyncio.Event()
 
         self.add_cogs()
@@ -255,16 +251,36 @@ class DiscordClient(discord.ext.commands.Bot):
                 cog = f"cogs.{cog[:-3]}"
                 self.load_extension(cog)
 
-    async def to_return(self, channel_id, user):
+    async def hook_create(self, channel):
+        hook_name = "matrix_bridge"
+
+        hooks = await channel.webhooks()
+
+        # Check if webhook exists.
+        hook = discord.utils.get(hooks, name=hook_name)
+        if not hook:
+            hook = await channel.create_webhook(name=hook_name)
+
+        self.webhook_ids.append(hook.id)
+
+        return hook
+
+    async def to_return(self, channel_id, message=None):
         await self.matrix_client.ready.wait()
 
-        if user.discriminator == "0000" \
-                or str(channel_id) not in config["bridge"].keys():
+        if str(channel_id) not in config["bridge"].keys():
             return True
+
+        if message:
+            if message.webhook_id in self.webhook_ids:
+                return True
 
     async def on_ready(self):
         for channel in config["bridge"].keys():
-            self.channel_store[channel] = self.get_channel(int(channel))
+            channel_ = self.get_channel(int(channel))
+            self.channel_store[channel] = channel_
+
+            await self.hook_create(channel_)
 
         self.ready.set()
 
@@ -272,7 +288,7 @@ class DiscordClient(discord.ext.commands.Bot):
         # Process other stuff like cogs before ignoring the message.
         await self.process_commands(message)
 
-        if await self.to_return(message.channel.id, message.author):
+        if await self.to_return(message.channel.id, message):
             return
 
         content = await self.process_message(message)
@@ -285,7 +301,7 @@ class DiscordClient(discord.ext.commands.Bot):
         message_store[message.id] = matrix_message
 
     async def on_message_edit(self, before, after):
-        if await self.to_return(after.channel.id, after.author):
+        if await self.to_return(after.channel.id, after):
             return
 
         content = await self.process_message(after)
@@ -305,7 +321,7 @@ class DiscordClient(discord.ext.commands.Bot):
             )
 
     async def on_typing(self, channel, user, when):
-        if await self.to_return(channel.id, user) or user == self.user:
+        if await self.to_return(channel.id) or user == self.user:
             return
 
         # Send typing event

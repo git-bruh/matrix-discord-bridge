@@ -309,11 +309,14 @@ class DiscordClient(discord.ext.commands.Bot):
             room_id, message.clean_content, mxid
         )
 
-    async def wrap(self, message: discord.Message) -> str:
+    async def wrap(self, message: discord.Message) -> tuple:
         # TODO Database
         mxid = await self.appservice.register(message.author.id)
 
-        await self.appservice.set_nick(message.author.display_name, mxid)
+
+        await self.appservice.set_nick(
+            f"{message.author.name}#{message.author.discriminator}", mxid
+        )
 
         await self.appservice.set_avatar(
             await self.appservice.upload(message.author.avatar_url), mxid

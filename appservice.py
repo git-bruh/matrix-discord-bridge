@@ -51,16 +51,6 @@ class AppService(object):
 
         self.run_discord()
 
-    @dataclass
-    class Message(object):
-        body: str
-        channel_id: int
-        event_id: str
-        homeserver: str
-        room_id: str
-        sender: str
-        sender_avatar: str
-
     def run_discord(self) -> None:
         allowed_mentions = discord.AllowedMentions(everyone=False, roles=False)
         command_prefix = config["discord_cmd_prefix"]
@@ -108,6 +98,16 @@ class AppService(object):
             return True
 
         return False
+
+    @dataclass
+    class Message(object):
+        body: str
+        channel_id: int
+        event_id: str
+        homeserver: str
+        room_id: str
+        sender: str
+        sender_avatar: str
 
     async def get_message_object(self, event: dict) -> Message:
         body = event.get("content").get("body")
@@ -191,7 +191,7 @@ class AppService(object):
                 else:
                     return await response.json()
 
-    async def register(self, user_id: int) -> dict:
+    async def register(self, user_id: int) -> str:
         content = {"type": "m.login.application_service",
                    "username": f"discord_{user_id}"}
 
@@ -309,7 +309,7 @@ class DiscordClient(discord.ext.commands.Bot):
             room_id, message.clean_content, mxid
         )
 
-    async def wrap(self, message: discord.Message) -> None:
+    async def wrap(self, message: discord.Message) -> str:
         # TODO Database
         mxid = await self.appservice.register(message.author.id)
 

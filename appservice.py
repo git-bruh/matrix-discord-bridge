@@ -61,11 +61,6 @@ class AppService(object):
         sender: str
         sender_avatar: str
 
-    @dataclass
-    class RequestError(Exception):
-        def __init__(self, code, content):
-            super().__init__(f"{code}: {content}")
-
     def run_discord(self) -> None:
         allowed_mentions = discord.AllowedMentions(everyone=False, roles=False)
         command_prefix = config["discord_cmd_prefix"]
@@ -185,8 +180,8 @@ class AppService(object):
 
             async with request as response:
                 if response.status < 200 or response.status >= 300:
-                    raise self.RequestError(
-                        response.status, await response.text()
+                    raise Exception(
+                        f"{response.status}: {await response.text()}"
                     )
 
                 if response.status == 429:

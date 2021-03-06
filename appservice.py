@@ -43,8 +43,13 @@ class DataBase(object):
         self.create(db_file)
 
     def create(self, db_file) -> None:
+        exists = os.path.exists(db_file)
+
         self.conn = sqlite3.connect(db_file)
         self.cur = self.conn.cursor()
+
+        if exists:
+            return
 
         self.execute(
             "CREATE TABLE bridge(room_id TEXT PRIMARY KEY, channel_id INT);"
@@ -64,9 +69,6 @@ class DataBase(object):
             f"VALUES ({room_id}, {channel_id})"
         )
 
-    def add_to_room(self, mxid: str, room_alias: str) -> None:
-        self.execute("UPDATE users SET ")
-
     def add_user(self, mxid: str) -> None:
         self.execute(f"INSERT INTO users (mxid) VALUES ({mxid})")
 
@@ -78,11 +80,13 @@ class DataBase(object):
         if rooms:
             return [room for room in rooms if room[0] == room_id][0][1]
 
-    def list_channels(self) -> list:
+    def list_channels(self) -> Union[list, None]:
         self.execute("SELECT channel_id FROM bridge")
 
         channels = self.cur.fetchall()
-        return [channel[0] for channel in channels]
+
+        if channels:
+            return [channel[0] for channel in channels]
 
     def query_user(self, mxid: str) -> bool:
         self.execute("SELECT * FROM users")
@@ -109,6 +113,7 @@ class AppService(object):
         self.add_routes()
 
         self.run_discord()
+        self.loop.create_task(self.wait())
 
     def run_discord(self) -> None:
         allowed_mentions = discord.AllowedMentions(everyone=False, roles=False)
@@ -138,8 +143,14 @@ class AppService(object):
         # ssl_ctx.load_cert_chain("cert/RootCA.pem", "cert/RootCA.key")
         # ssl_context=ssl_ctx
 
-        self.ready.set()
         aiohttp.web.run_app(self.app, host=host, port=port)
+
+    async def wait(self) -> None:
+        # Make the Discord bot wait until atleast one channel is bridged.
+        while not self.db.list_channels():
+            await asyncio.sleep(1)
+
+        self.ready.set()
 
     async def receive_event(self, transaction: aiohttp.web_request.Request) \
             -> aiohttp.web_response.Response:

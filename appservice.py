@@ -2,7 +2,6 @@ import asyncio
 import json
 import logging
 import os
-# import ssl
 import sqlite3
 import sys
 import uuid
@@ -46,6 +45,8 @@ class DataBase(object):
         exists = os.path.exists(db_file)
 
         self.conn = sqlite3.connect(db_file)
+        self.conn.row_factory = self.dict_factory
+
         self.cur = self.conn.cursor()
 
         if exists:
@@ -56,8 +57,15 @@ class DataBase(object):
         )
 
         self.execute(
-            "CREATE TABLE users(mxid TEXT PRIMARY KEY, rooms TEXT);"
+            "CREATE TABLE users(mxid TEXT PRIMARY KEY, "
+            "avatar_url TEXT, nickname TEXT);"
         )
+
+    def dict_factory(self, cursor, row):
+        d = {}
+        for idx, col in enumerate(cursor.description):
+            d[col[0]] = row[idx]
+        return d
 
     def execute(self, operation) -> None:
         self.cur.execute(operation)
@@ -66,40 +74,42 @@ class DataBase(object):
     def add_room(self, room_id: str, channel_id: int) -> None:
         self.execute(
             "INSERT INTO bridge (room_id, channel_id) "
-            f"VALUES ({room_id}, {channel_id})"
+            f"VALUES ('{room_id}', {channel_id})"
         )
 
     def add_user(self, mxid: str) -> None:
-        self.execute(f"INSERT INTO users (mxid) VALUES ({mxid})")
+        self.execute(f"INSERT INTO users (mxid) VALUES ('{mxid}')")
 
-    def get_channel(self, room_id: str) -> Union[int, None]:
-        self.execute("SELECT * FROM bridge")
+    def get_channel(self, room_id: str) -> int:
+        self.cur.execute("SELECT channel_id FROM bridge WHERE room_id = ?",
+                         [room_id])
 
-        rooms = self.cur.fetchall()
+        room = self.cur.fetchone()
 
-        if rooms:
-            return [room for room in rooms if room[0] == room_id][0][1]
+        # Return '0' if nothing is bridged yet.
+        return 0 if not room else room["channel_id"]
 
-    def list_channels(self) -> Union[list, None]:
+    def list_channels(self) -> list:
         self.execute("SELECT channel_id FROM bridge")
 
         channels = self.cur.fetchall()
 
-        if channels:
-            return [channel[0] for channel in channels]
+        # Returns '[]' if nothing is bridged yet.
+        return channels if not channels else \
+            [channel["channel_id"] for channel in channels]
 
     def query_user(self, mxid: str) -> bool:
-        self.execute("SELECT * FROM users")
+        self.execute("SELECT mxid FROM users")
 
         users = self.cur.fetchall()
-        return True if [user for user in users if user[0] == mxid] else False
+
+        return next((True for user in users if user["mxid"] == mxid), False)
 
 
 class AppService(object):
     def __init__(self) -> None:
         self.ready = asyncio.Event()
         self.loop = asyncio.get_event_loop()
-
         self.base_url = config["homeserver"]
         self.plain_url = self.base_url.split("://")[-1].split(":")[0].replace(
             "127.0.0.1", "localhost"
@@ -113,7 +123,6 @@ class AppService(object):
         self.add_routes()
 
         self.run_discord()
-        self.loop.create_task(self.wait())
 
     def run_discord(self) -> None:
         allowed_mentions = discord.AllowedMentions(everyone=False, roles=False)
@@ -139,18 +148,8 @@ class AppService(object):
         # self.app.router.add_route("GET", "/rooms/{alias}", self.query_alias)
 
     def run(self, host: str = "127.0.0.1", port: int = 5000) -> None:
-        # ssl_ctx = ssl.create_default_context(cafile="cert/RootCA.crt")
-        # ssl_ctx.load_cert_chain("cert/RootCA.pem", "cert/RootCA.key")
-        # ssl_context=ssl_ctx
-
-        aiohttp.web.run_app(self.app, host=host, port=port)
-
-    async def wait(self) -> None:
-        # Make the Discord bot wait until atleast one channel is bridged.
-        while not self.db.list_channels():
-            await asyncio.sleep(1)
-
         self.ready.set()
+        aiohttp.web.run_app(self.app, host=host, port=port)
 
     async def receive_event(self, transaction: aiohttp.web_request.Request) \
             -> aiohttp.web_response.Response:
@@ -159,12 +158,11 @@ class AppService(object):
 
         for event in events:
             event_type = event.get("type")
-            print(event)
-            print(event_type)
+
             if event_type == "m.room.member":
                 await self.handle_member(event)
-            # if event_type == "m.room.message":
-                # await self.handle_message(event)
+            elif event_type == "m.room.message":
+                await self.handle_message(event)
 
         return aiohttp.web.Response(body=b"{}")
 
@@ -224,16 +222,26 @@ class AppService(object):
 
     async def handle_message(self, event: dict) -> None:
         message = self.get_event_object(event)
-        user = await self.get_user_object(event.sender)
+        user = await self.get_user_object(message.sender)
 
         # Ignore empty messages.
         if await self.to_return(event) or not message.body:
             return
 
+        if message.body.startswith("!bridge"):
+            try:
+                channel = int(message.body.split()[-1])
+            except ValueError:
+                return
+
+            await self.create_room(channel, message.sender)
+
+            return
+
         await self.send_webhook(message, user)
 
     async def send_webhook(self, message: Event, user: User) -> None:
-        channel = self.get_channel(message.channel_id)
+        channel = self.discord_client.get_channel(message.channel_id)
 
         hook_name = "matrix_bridge"
 
@@ -290,13 +298,31 @@ class AppService(object):
                 else:
                     return await response.json()
 
-    async def register(self, mxid: str) -> None:
+    async def register(self, mxid: str) -> str:
         content = {"type": "m.login.application_service",
                    "username": mxid}
 
-        await self.send(
-            "POST", "/register", content
-        )
+        resp = await self.send("POST", "/register", content)
+
+        return resp["user_id"]
+
+    async def create_room(self, channel_id: int, sender: str):
+        room_alias = f"discord_{channel_id}"
+
+        content = {
+            "visibility": "private", "room_alias_name": room_alias,
+            "invite": [sender], "creation_content": {"m.federate": True},
+            "initial_state": [
+                {"type": "m.room.join_rules",
+                 "content": {"join_rule": "invite"}},
+                {"type": "m.room.history_visibility",
+                 "content": {"history_visibility": "shared"}}
+            ], "power_level_content_override": {"users": {sender: 100}}
+        }
+
+        resp = await self.send("POST", "/createRoom", content)
+
+        self.db.add_room(resp["room_id"], channel_id)
 
     async def get_profile(self, mxid: str) -> tuple:
         resp = await self.send(
@@ -304,11 +330,14 @@ class AppService(object):
         )
 
         avatar_url = resp.get("avatar_url")
-        display_name = resp.get("displayname")
-
         avatar_url = avatar_url[6:].split("/")
-        avatar_url = f"{self.base_url}/_matrix/media/r0/download/" \
-                     f"{avatar_url[0]}/{avatar_url[1]}"
+        try:
+            avatar_url = f"{self.base_url}/_matrix/media/r0/download/" \
+                         f"{avatar_url[0]}/{avatar_url[1]}"
+        except IndexError:
+            avatar_url = None
+
+        display_name = resp.get("displayname")
 
         return avatar_url, display_name
 
@@ -408,8 +437,8 @@ class DiscordClient(discord.ext.commands.Bot):
         # Process other stuff like cogs before ignoring the message.
         await self.process_commands(message)
 
-        # if await self.to_return(message):
-        return
+        if await self.to_return(message):
+            return
 
         mxid, room_id = await self.wrap(message)
 
@@ -418,13 +447,15 @@ class DiscordClient(discord.ext.commands.Bot):
         )
 
     async def wrap(self, message: discord.Message) -> tuple:
-        mxid = f"@_discord_{message.author.id}:{self.app.plain_url}"
+        mxid = f"_discord_{message.author.id}"
 
         room_alias = f"#discord_{message.channel.id}:{self.app.plain_url}"
         room_id = await self.app.get_room_id(room_alias)
 
         if not self.app.db.query_user(mxid):
-            await self.app.register(mxid)
+            # mxid = await self.app.register(mxid)
+
+            mxid = f"@{mxid}:{self.app.plain_url}"
 
             await self.app.set_nick(
                 f"{message.author.name}#{message.author.discriminator}", mxid
@@ -435,7 +466,7 @@ class DiscordClient(discord.ext.commands.Bot):
             )
 
         if mxid not in await self.app.get_members(room_id):
-            room_id = await self.app.join_room(room_id)
+            room_id = await self.app.join_room(room_id, mxid)
 
             await self.app.set_nick(
                 f"{message.author.display_name}", mxid, room_id

@@ -43,9 +43,6 @@ class DataBase(object):
         self.create(db_file)
 
     def create(self, db_file) -> None:
-        if os.path.exists(db_file):
-            return
-
         self.conn = sqlite3.connect(db_file)
         self.cur = self.conn.cursor()
 
@@ -73,11 +70,13 @@ class DataBase(object):
     def add_user(self, mxid: str) -> None:
         self.execute(f"INSERT INTO users (mxid) VALUES ({mxid})")
 
-    def get_channel(self, room_id: str) -> int:
+    def get_channel(self, room_id: str) -> Union[int, None]:
         self.execute("SELECT * FROM bridge")
 
         rooms = self.cur.fetchall()
-        return [room for room in rooms if room[0] == room_id][0][1]
+
+        if rooms:
+            return [room for room in rooms if room[0] == room_id][0][1]
 
     def list_channels(self) -> list:
         self.execute("SELECT channel_id FROM bridge")
@@ -152,7 +151,7 @@ class AppService(object):
             print(event)
             print(event_type)
             if event_type == "m.room.member":
-                await self.handle_invite(event)
+                await self.handle_member(event)
             # if event_type == "m.room.message":
                 # await self.handle_message(event)
 
@@ -175,7 +174,6 @@ class AppService(object):
         homeserver: str
         room_id: str
         sender: str
-        sender_avatar: str
 
     @dataclass
     class User(object):
@@ -303,6 +301,17 @@ class AppService(object):
 
         return avatar_url, display_name
 
+    async def get_members(self, room_id: str) -> list:
+        resp = await self.send(
+            "GET", f"/rooms/{room_id}/members",
+            params={"membership": "join", "not_membership": "leave"}
+        )
+
+        return [
+            content["sender"] for content in resp["chunk"]
+            if content["content"]["membership"] == "join"
+        ]
+
     async def set_nick(self, nickname: str, mxid: str, room_id: str = "") \
             -> None:
         if not room_id:
@@ -371,7 +380,6 @@ class DiscordClient(discord.ext.commands.Bot):
         self.app = appservice
 
         self.ready = asyncio.Event()
-        self.channel_cache = {}
 
     async def to_return(self, message: discord.Message) -> bool:
         await self.app.ready.wait()
@@ -415,7 +423,7 @@ class DiscordClient(discord.ext.commands.Bot):
                 await self.app.upload(message.author.avatar_url), mxid
             )
 
-        if not self.app.db.query_room(room_alias, mxid):
+        if mxid not in await self.app.get_members(room_id):
             room_id = await self.app.join_room(room_id)
 
             await self.app.set_nick(

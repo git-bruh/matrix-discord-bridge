@@ -86,7 +86,7 @@ class DataBase(object):
 
         room = self.cur.fetchone()
 
-        # Return '0' if nothing is bridged yet.
+        # Return '0' if nothing is bridged.
         return 0 if not room else room["channel_id"]
 
     def list_channels(self) -> list:
@@ -94,9 +94,8 @@ class DataBase(object):
 
         channels = self.cur.fetchall()
 
-        # Returns '[]' if nothing is bridged yet.
-        return channels if not channels else \
-            [channel["channel_id"] for channel in channels]
+        # Returns '[]' if nothing is bridged.
+        return [channel["channel_id"] for channel in channels]
 
     def query_user(self, mxid: str) -> bool:
         self.execute("SELECT mxid FROM users")
@@ -158,6 +157,8 @@ class AppService(object):
 
         for event in events:
             event_type = event.get("type")
+
+            print(event)
 
             if event_type == "m.room.member":
                 await self.handle_member(event)
@@ -238,6 +239,9 @@ class AppService(object):
 
             return
 
+        if message.channel_id not in self.db.list_channels():
+            return
+
         await self.send_webhook(message, user)
 
     async def send_webhook(self, message: Event, user: User) -> None:
@@ -304,6 +308,8 @@ class AppService(object):
 
         resp = await self.send("POST", "/register", content)
 
+        self.db.add_user(mxid)
+
         return resp["user_id"]
 
     async def create_room(self, channel_id: int, sender: str):
@@ -352,18 +358,11 @@ class AppService(object):
             if content["content"]["membership"] == "join"
         ]
 
-    async def set_nick(self, nickname: str, mxid: str, room_id: str = "") \
-            -> None:
-        if not room_id:
-            await self.send(
-                "PUT", f"/profile/{mxid}/displayname",
-                {"displayname": nickname}, params={"user_id": mxid}
-            )
-        else:
-            await self.send(
-                "PUT" f"/rooms/{room_id}/state/m.room.member/{mxid}",
-                {"displayname": nickname}, params={"user_id": mxid}
-            )
+    async def set_nick(self, nickname: str, mxid: str) -> None:
+        await self.send(
+            "PUT", f"/profile/{mxid}/displayname",
+            {"displayname": nickname}, params={"user_id": mxid}
+        )
 
     async def set_avatar(self, avatar_uri: str, mxid: str) -> None:
         await self.send(
@@ -396,6 +395,11 @@ class AppService(object):
 
         resp = await self.send("POST", f"/join/{room_id}", params=params)
         return resp.get("room_id")
+
+    async def send_invite(self, room_id: str, mxid: str) -> None:
+        await self.send(
+            "POST", f"/rooms/{room_id}/invite", {"user_id": mxid}
+        )
 
     async def send_message(self, room_id: str, content: str, mxid: str) -> str:
         content = await self.create_message_event(content)
@@ -447,15 +451,14 @@ class DiscordClient(discord.ext.commands.Bot):
         )
 
     async def wrap(self, message: discord.Message) -> tuple:
-        mxid = f"_discord_{message.author.id}"
+        mxid_tmp = f"_discord_{message.author.id}"
+        mxid = f"@{mxid_tmp}:{self.app.plain_url}"
 
         room_alias = f"#discord_{message.channel.id}:{self.app.plain_url}"
         room_id = await self.app.get_room_id(room_alias)
 
-        if not self.app.db.query_user(mxid):
-            # mxid = await self.app.register(mxid)
-
-            mxid = f"@{mxid}:{self.app.plain_url}"
+        if not self.app.db.query_user(mxid_tmp):
+            await self.app.register(mxid_tmp)
 
             await self.app.set_nick(
                 f"{message.author.name}#{message.author.discriminator}", mxid
@@ -466,11 +469,8 @@ class DiscordClient(discord.ext.commands.Bot):
             )
 
         if mxid not in await self.app.get_members(room_id):
-            room_id = await self.app.join_room(room_id, mxid)
-
-            await self.app.set_nick(
-                f"{message.author.display_name}", mxid, room_id
-            )
+            await self.app.send_invite(room_id, mxid)
+            await self.app.join_room(room_id, mxid)
 
         return mxid, room_id
 

@@ -158,7 +158,7 @@ class AppService(object):
         for event in events:
             event_type = event.get("type")
 
-            print(event)
+            # print(event)
 
             if event_type == "m.room.member":
                 await self.handle_member(event)
@@ -170,7 +170,7 @@ class AppService(object):
     async def to_return(self, event: dict) -> bool:
         await self.discord_client.ready.wait()
 
-        if event.get("sender").startswith("@discord_"):
+        if event.get("sender").startswith("@_discord"):
             return True
 
         return False
@@ -219,7 +219,23 @@ class AppService(object):
 
         # Join the direct message room.
         if event.is_direct:
+            logging.info(f"Joining direct message room {event.room_id}")
             await self.join_room(event.room_id)
+
+    async def handle_bridge(self, message: Event) -> None:
+        try:
+            channel = int(message.body.split()[1])
+        except ValueError:
+            return
+
+        # See if the given channel is valid.
+        check = self.discord_client.get_channel(channel)
+        if not check or len(str(channel)) != 18:
+            return
+
+        logging.info(f"Creating bridged room for channel {channel}")
+
+        await self.create_room(channel, message.sender)
 
     async def handle_message(self, event: dict) -> None:
         message = self.get_event_object(event)
@@ -230,16 +246,10 @@ class AppService(object):
             return
 
         if message.body.startswith("!bridge"):
-            try:
-                channel = int(message.body.split()[-1])
-            except ValueError:
-                return
+            await self.handle_bridge(message)
 
-            await self.create_room(channel, message.sender)
-
-            return
-
-        if message.channel_id not in self.db.list_channels():
+        if message.channel_id not in self.db.list_channels() \
+                or not message.channel_id:
             return
 
         await self.send_webhook(message, user)
@@ -394,15 +404,18 @@ class AppService(object):
         params = {"user_id": mxid} if mxid else {}
 
         resp = await self.send("POST", f"/join/{room_id}", params=params)
+
         return resp.get("room_id")
 
     async def send_invite(self, room_id: str, mxid: str) -> None:
+        logging.info(f"Inviting user {mxid} to room {room_id}")
+
         await self.send(
             "POST", f"/rooms/{room_id}/invite", {"user_id": mxid}
         )
 
     async def send_message(self, room_id: str, content: str, mxid: str) -> str:
-        content = await self.create_message_event(content)
+        content = self.create_message_event(content)
 
         resp = await self.send(
             "PUT", f"/rooms/{room_id}/send/m.room.message/{uuid.uuid4()}",
@@ -411,7 +424,7 @@ class AppService(object):
 
         return resp.get("event_id")
 
-    async def create_message_event(self, message: str) -> dict:
+    def create_message_event(self, message: str) -> dict:
         content = {"body": message, "msgtype": "m.text"}
 
         return content
@@ -451,14 +464,15 @@ class DiscordClient(discord.ext.commands.Bot):
         )
 
     async def wrap(self, message: discord.Message) -> tuple:
-        mxid_tmp = f"_discord_{message.author.id}"
-        mxid = f"@{mxid_tmp}:{self.app.plain_url}"
+        mxid_register = f"_discord_{message.author.id}"
+        mxid = f"@{mxid_register}:{self.app.plain_url}"
 
         room_alias = f"#discord_{message.channel.id}:{self.app.plain_url}"
-        room_id = await self.app.get_room_id(room_alias)
+        room_id = await self.app.get_room_id(room_alias)  # Cache ?
 
-        if not self.app.db.query_user(mxid_tmp):
-            await self.app.register(mxid_tmp)
+        if not self.app.db.query_user(mxid_register):
+            logging.info(f"Creating dummy user for user {message.author.id}")
+            await self.app.register(mxid_register)
 
             await self.app.set_nick(
                 f"{message.author.name}#{message.author.discriminator}", mxid

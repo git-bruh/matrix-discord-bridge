@@ -3,16 +3,15 @@ import json
 import logging
 import os
 import sqlite3
+import threading
+import time
 import sys
 import uuid
-
+import urllib3
+import bottle
+import websockets
 from dataclasses import dataclass
 from typing import Union
-
-import aiohttp.web
-
-import discord
-import discord.ext.commands
 
 
 def config_gen(config_file: str) -> dict:
@@ -58,17 +57,19 @@ class DataBase(object):
 
         self.execute(
             "CREATE TABLE users(mxid TEXT PRIMARY KEY, "
-            "avatar_url TEXT, nickname TEXT);"
+            "avatar_url TEXT, username TEXT);"
         )
 
     def dict_factory(self, cursor, row):
+        # https://docs.python.org/3/library/sqlite3.html#sqlite3.Connection.row_factory
+
         d = {}
         for idx, col in enumerate(cursor.description):
             d[col[0]] = row[idx]
         return d
 
-    def execute(self, operation) -> None:
-        self.cur.execute(operation)
+    def execute(self, operation: str) -> None:
+        self.cur.execute(operation) # TODO remove this useless function
         self.conn.commit()
 
     def add_room(self, room_id: str, channel_id: int) -> None:
@@ -81,8 +82,7 @@ class DataBase(object):
         self.execute(f"INSERT INTO users (mxid) VALUES ('{mxid}')")
 
     def get_channel(self, room_id: str) -> int:
-        self.cur.execute("SELECT channel_id FROM bridge WHERE room_id = ?",
-                         [room_id])
+        self.cur.execute("SELECT channel_id FROM bridge WHERE room_id = ?", [room_id])
 
         room = self.cur.fetchone()
 
@@ -105,71 +105,62 @@ class DataBase(object):
         return next((True for user in users if user["mxid"] == mxid), False)
 
 
-class AppService(object):
+class AppService(bottle.Bottle):
     def __init__(self) -> None:
-        self.ready = asyncio.Event()
-        self.loop = asyncio.get_event_loop()
-        self.base_url = config["homeserver"]
-        self.plain_url = self.base_url.split("://")[-1].split(":")[0].replace(
-            "127.0.0.1", "localhost"
-        )
+        super(AppService, self).__init__()
 
-        self.token = config["as_token"]
+        self.base_url  = config["homeserver"]
+        self.plain_url = self.base_url.split("://") \
+            [-1].split(":")[0].replace("127.0.0.1", "localhost")
+        self.db        = DataBase(config["database"])
+        self.discord   = DiscordClient(self)
+        self.token     = config["as_token"]
+        self.manager   = urllib3.PoolManager()
 
-        self.app = aiohttp.web.Application(client_max_size=None)
-        self.db = DataBase(config["database"])
+        # Add route for bottle.
+        self.route("/transactions/<transaction>",
+                   callback=self.receive_event, method="PUT")
 
-        self.add_routes()
+    def start(self):
+        self.run(host="127.0.0.1", port=5000)
 
-        self.run_discord()
+        # TODO
+        logging.info("Closing database")
 
-    def run_discord(self) -> None:
-        allowed_mentions = discord.AllowedMentions(everyone=False, roles=False)
-        command_prefix = config["discord_cmd_prefix"]
+        self.db.cur.close()
+        self.db.conn.close()
 
-        # Intents to fetch members from Guilds.
-        intents = discord.Intents.default()
-        intents.members = True
+    def receive_event(self, transaction: str) -> dict:
+        """
+        The homeserver hits this endpoint to send us new events.
+        """
 
-        self.discord_client = DiscordClient(
-            self, allowed_mentions=allowed_mentions,
-            command_prefix=command_prefix, intents=intents
-        )
-
-        self.loop.create_task(
-            self.discord_client.start(config["discord_token"])
-        )
-
-    def add_routes(self) -> None:
-        self.app.router.add_route(
-            "PUT", "/transactions/{transaction}", self.receive_event
-        )
-        # self.app.router.add_route("GET", "/rooms/{alias}", self.query_alias)
-
-    def run(self, host: str = "127.0.0.1", port: int = 5000) -> None:
-        self.ready.set()
-        aiohttp.web.run_app(self.app, host=host, port=port)
-
-    async def receive_event(self, transaction: aiohttp.web_request.Request) \
-            -> aiohttp.web_response.Response:
-        json = await transaction.json()
-        events = json.get("events")
+        events = bottle.request.json.get("events")
 
         for event in events:
             event_type = event.get("type")
 
-            # print(event)
-
             if event_type == "m.room.member":
-                await self.handle_member(event)
+                self.handle_member(event)
             elif event_type == "m.room.message":
-                await self.handle_message(event)
+                self.handle_message(event)
 
-        return aiohttp.web.Response(body=b"{}")
+        return {}
 
-    async def to_return(self, event: dict) -> bool:
-        await self.discord_client.ready.wait()
+    def send(self, method: str, content: Union[bytes, dict],
+             content_type: str = "application/json",
+             path: str = "", params: dict = {},
+             endpoint: str = "/_matrix/client/r0") -> dict:
+        headers  = {"Content-Type": content_type}
+        content  = json.dumps(content) if type(content) == dict else content
+        endpoint = f"{self.base_url}{endpoint}{path}"
+        params["access_token"] = self.token
 
+        resp = self.manager.request(method, endpoint, body=content, fields=params, headers=headers)
+
+        return
+
+    def to_return(self, event: dict) -> bool:
         if event.get("sender").startswith("@_discord"):
             return True
 
@@ -193,13 +184,13 @@ class AppService(object):
     def get_event_object(self, event: dict) -> Event:
         content = event.get("content")
 
-        body = content.get("body")
-        event_id = event.get("event_id")
+        body       = content.get("body")
+        event_id   = event.get("event_id")
         homeserver = event.get("sender").split(":")[-1]
-        is_direct = content.get("is_direct")
-        room_id = event.get("room_id")
+        is_direct  = content.get("is_direct")
+        room_id    = event.get("room_id")
+        sender     = event.get("sender")
         channel_id = self.db.get_channel(room_id)
-        sender = event.get("sender")
 
         return self.Event(
             body, channel_id, event_id, is_direct, homeserver, room_id, sender
@@ -239,10 +230,10 @@ class AppService(object):
 
     async def handle_message(self, event: dict) -> None:
         message = self.get_event_object(event)
-        user = await self.get_user_object(message.sender)
+        user    = await self.get_user_object(message.sender)
 
         # Ignore empty messages.
-        if await self.to_return(event) or not message.body:
+        if self.to_return(event) or not message.body:
             return
 
         if message.body.startswith("!bridge"):
@@ -254,6 +245,7 @@ class AppService(object):
 
         await self.send_webhook(message, user)
 
+    '''
     async def send_webhook(self, message: Event, user: User) -> None:
         channel = self.discord_client.get_channel(message.channel_id)
 
@@ -278,43 +270,11 @@ class AppService(object):
                 f"Failed to send message {message.event_id} to channel "
                 f"{channel.id}: {e}"
             )
-
-    async def send(self, method: str, path: str = "",
-                   content: Union[bytes, dict] = {}, params: dict = {},
-                   content_type: str = "application/json",
-                   endpoint: str = "/_matrix/client/r0") -> dict:
-        method = method.upper()
-
-        headers = {"Content-Type": content_type}
-
-        if type(content) == dict:
-            content = json.dumps(content)
-
-        params["access_token"] = self.token
-
-        endpoint = f"{self.base_url}{endpoint}{path}"
-
-        while True:
-            request = aiohttp.request(
-                method, endpoint, params=params, data=content, headers=headers
-            )
-
-            async with request as response:
-                if response.status < 200 or response.status >= 300:
-                    raise Exception(
-                        f"{response.status}: {await response.text()}"
-                    )
-
-                if response.status == 429:
-                    await asyncio.sleep(
-                        response.json()["retry_after_ms"] / 1000
-                    )
-                else:
-                    return await response.json()
+    '''
 
     async def register(self, mxid: str) -> str:
         content = {"type": "m.login.application_service",
-                   "username": mxid}
+                   "username": mxid[1:-(len(self.app.plain_url) + 1)]}
 
         resp = await self.send("POST", "/register", content)
 
@@ -341,9 +301,7 @@ class AppService(object):
         self.db.add_room(resp["room_id"], channel_id)
 
     async def get_profile(self, mxid: str) -> tuple:
-        resp = await self.send(
-            "GET", f"/profile/{mxid}"
-        )
+        resp = await self.send("GET", f"/profile/{mxid}")
 
         avatar_url = resp.get("avatar_url")
         avatar_url = avatar_url[6:].split("/")
@@ -380,6 +338,7 @@ class AppService(object):
             params={"user_id": mxid}
         )
 
+    '''
     async def upload(self, url: str) -> str:
         async with aiohttp.ClientSession() as session:
             async with session.get(str(url)) as resp:
@@ -392,11 +351,10 @@ class AppService(object):
         )
 
         return resp.get("content_uri")
+    '''
 
     async def get_room_id(self, alias: str) -> str:
-        resp = await self.send(
-            "GET", f"/directory/room/{alias.replace('#', '%23')}"
-        )
+        resp = await self.send("GET", f"/directory/room/{alias.replace('#', '%23')}")
 
         return resp.get("room_id")
 
@@ -410,9 +368,7 @@ class AppService(object):
     async def send_invite(self, room_id: str, mxid: str) -> None:
         logging.info(f"Inviting user {mxid} to room {room_id}")
 
-        await self.send(
-            "POST", f"/rooms/{room_id}/invite", {"user_id": mxid}
-        )
+        await self.send("POST", f"/rooms/{room_id}/invite", {"user_id": mxid})
 
     async def send_message(self, room_id: str, content: str, mxid: str) -> str:
         content = self.create_message_event(content)
@@ -430,75 +386,219 @@ class AppService(object):
         return content
 
 
-class DiscordClient(discord.ext.commands.Bot):
-    def __init__(self, appservice, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+class DiscordClient(object):
+    def __init__(self, appservice) -> None:
+        self.app   = appservice
+        self.token = config["discord_token"]
 
-        self.app = appservice
+    class InteractionResponseType(object):
+        PONG                        = 0
+        ACKNOWLEDGE                 = 1
+        CHANNEL_MESSAGE             = 2
+        CHANNEL_MESSAGE_WITH_SOURCE = 4
+        ACKNOWLEDGE_WITH_SOURCE     = 5
 
-        self.ready = asyncio.Event()
+    class GatewayIntents(object):
+        def bitmask(bit: int) -> int:
+            return 1 << bit
 
-    async def to_return(self, message: discord.Message) -> bool:
-        await self.app.ready.wait()
+        GUILDS                   = bitmask(0)
+        GUILD_MEMBERS            = bitmask(1)
+        GUILD_BANS               = bitmask(2)
+        GUILD_EMOJIS             = bitmask(3)
+        GUILD_INTEGRATIONS       = bitmask(4)
+        GUILD_WEBHOOKS           = bitmask(5)
+        GUILD_INVITES            = bitmask(6)
+        GUILD_VOICE_STATES       = bitmask(7)
+        GUILD_PRESENCES          = bitmask(8)
+        GUILD_MESSAGES           = bitmask(9)
+        GUILD_MESSAGE_REACTIONS  = bitmask(10)
+        GUILD_MESSAGE_TYPING     = bitmask(11)
+        DIRECT_MESSAGES          = bitmask(12)
+        DIRECT_MESSAGE_REACTIONS = bitmask(13)
+        DIRECT_MESSAGE_TYPING    = bitmask(14)
 
-        if message.channel.id not in self.app.db.list_channels() or \
-                message.author.discriminator == "0000":
+    class GatewayOpCodes(object):
+        DISPATCH              = 0
+        HEARTBEAT             = 1
+        IDENTIFY              = 2
+        PRESENCE_UPDATE       = 3
+        VOICE_STATE_UPDATE    = 4
+        RESUME                = 6
+        RECONNECT             = 7
+        REQUEST_GUILD_MEMBERS = 8
+        INVALID_SESSION       = 9
+        HELLO                 = 10
+        HEARTBEAT_ACK         = 11
+
+    class Payloads(GatewayIntents, GatewayOpCodes):
+        def __init__(self):
+            # TODO: Use updated seqnum
+            self.HEARTBEAT = {"op": self.HEARTBEAT, "d": 0}
+
+            self.IDENTIFY = {
+                "op": self.IDENTIFY,
+                "d": {"token": config["discord_token"], "intents":
+                      self.GUILDS |
+                      self.GUILD_MESSAGES,
+                      "properties": {"$os": "discord", "$browser": "discord",
+                      "$device": "discord"}}
+                }
+
+    async def start(self):
+        await self.gateway_handler(self.get_gateway_url())
+
+    async def heartbeat_handler(self, websocket, interval_ms: int) -> None:
+        while True:
+            await asyncio.sleep(interval_ms / 1000)
+            await websocket.send(json.dumps(self.Payloads().HEARTBEAT))
+
+    async def gateway_handler(self, gateway_url: str) -> None:
+        gateway_url += "/?v=8&encoding=json"
+        async with websockets.connect(gateway_url) as websocket:
+            async for message in websocket:
+                data      = json.loads(message)
+                data_dict = data.get("d")
+
+                opcode = data.get("op")
+
+                if opcode == self.GatewayOpCodes.DISPATCH:
+                    otype = data.get("t")
+                    if otype == "READY":
+                        logging.info("READY")
+
+                    elif otype == "MESSAGE_CREATE":
+                        self.handle_message(data_dict)
+
+                    elif otype == "MESSAGE_DELETE":
+                        self.handle_deletion(data_dict)
+
+                    elif otype == "MESSAGE_UPDATE":
+                        self.handle_edit(data_dict)
+
+                    else:
+                        logging.info(f"Unknown {otype}")
+
+                elif opcode == self.GatewayOpCodes.HELLO:
+                    heartbeat_interval = data_dict.get("heartbeat_interval")
+                    logging.info(f"Heartbeat Interval: {heartbeat_interval}")
+
+                    # Send periodic hearbeats to gateway.
+                    asyncio.ensure_future(self.heartbeat_handler(
+                        websocket, heartbeat_interval
+                    ))
+
+                    await websocket.send(json.dumps(self.Payloads().IDENTIFY))
+
+                elif opcode == self.GatewayOpCodes.HEARTBEAT_ACK:
+                    # NOP
+                    pass
+
+                else:
+                    logging.info(f"Unknown event:\n{json.dumps(data, indent=4)}")
+
+    @dataclass
+    class Member(object):
+        avatar_url: str
+        discriminator: str
+        id: str
+        username: str
+
+    class Message(object):
+        def __init__(self, attachments: list, author, content: str,
+                     channel_id: str, edited: bool, message_id: str) -> None:
+            self.attachments = attachments
+            self.author      = author
+            self.content     = content
+            self.channel_id  = channel_id
+            self.edited      = edited
+            self.id          = message_id
+
+    def get_member_object(self, author: dict) -> Member:
+        author_id     = author.get("id")
+        avatar        = author.get("avatar")
+
+        if not avatar:
+            avatar_url = None
+        else:
+            avatar_ext = "gif" if avatar.startswith("a_") else "png"
+            avatar_url = "https://cdn.discordapp.com/avatars/" \
+                         f"{author_id}/{avatar}.{avatar_ext}"
+
+        discriminator = author.get("discriminator")
+        username      = author.get("username")
+
+        return self.Member(avatar_url, discriminator, author_id, username)
+
+    def get_message_object(self, message: dict) -> Message:
+        author = self.get_member_object(message.get("author"))
+
+        attachments = message.get("attachments")
+        content     = message.get("content")
+        channel_id  = message.get("channel_id")
+        message_id  = message.get("id")
+        edited      = True if message.get("edited_timestamp") else False
+
+        return self.Message(attachments, author, content, channel_id, edited, message_id)
+
+    def to_return(self, message: Message) -> bool:
+        if message.author.discriminator == "0000":
             return True
 
         return False
 
-    async def on_ready(self) -> None:
-        self.ready.set()
+    def handle_message(self, message: dict) -> None:
+        message = self.get_message_object(message)
 
-    async def on_message(self, message: discord.Message) -> None:
-        # Process other stuff like cogs before ignoring the message.
-        await self.process_commands(message)
-
-        if await self.to_return(message):
+        if self.to_return(message):
             return
 
-        mxid, room_id = await self.wrap(message)
+    def handle_deletion(self, message: dict) -> None:
+        return
+        # self.app.redact(message.get("id")) # message.get("channel_id")
 
-        await self.app.send_message(
-            room_id, message.clean_content, mxid
-        )
+    def handle_edit(self, message: dict) -> None:
+        message = self.get_message_object(message)
 
-    async def wrap(self, message: discord.Message) -> tuple:
-        mxid_register = f"_discord_{message.author.id}"
-        mxid = f"@{mxid_register}:{self.app.plain_url}"
+        if self.to_return(message):
+            return
 
-        room_alias = f"#discord_{message.channel.id}:{self.app.plain_url}"
-        room_id = await self.app.get_room_id(room_alias)  # Cache ?
+    def send(self, method: str, path: str, content: dict = {}) -> dict:
+        endpoint = "https://discord.com/api/v8"
+        headers  = {"Authorization": f"Bot {self.token}", "Content-Type": "application/json"}
 
-        if not self.app.db.query_user(mxid_register):
-            logging.info(f"Creating dummy user for user {message.author.id}")
-            await self.app.register(mxid_register)
+        # 'body' being an empty dict breaks "GET" requests.
+        content = json.dumps(content) if content else None
 
-            await self.app.set_nick(
-                f"{message.author.name}#{message.author.discriminator}", mxid
-            )
+        resp = self.app.manager.request(method, f"{endpoint}{path}", body=content, headers=headers)
 
-            await self.app.set_avatar(
-                await self.app.upload(message.author.avatar_url), mxid
-            )
+        return json.loads(resp.data)
 
-        if mxid not in await self.app.get_members(room_id):
-            await self.app.send_invite(room_id, mxid)
-            await self.app.join_room(room_id, mxid)
+    def get_gateway_url(self) -> str:
+        resp = self.send("GET", "/gateway")
 
-        return mxid, room_id
+        return resp.get("url")
 
+    def get_webhooks(self, channel_id: str) -> None:
+        webhooks = self.send("GET", f"/channels/{channel_id}/webhooks")
+        return [ {webhook["name"]: webhook["token"]} for webhook in webhooks ]
+
+    def send_message(self, message: str, channel_id: str) -> None:
+        self.send("POST", f"/channels/{channel_id}/messages", {"content": message})
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
 
     app = AppService()
 
-    app.run()
+    # Start the bottle app in a separate thread.
+    app_thread = threading.Thread(target=app.start, daemon=True)
+    app_thread.start()
 
-    app.db.cur.close()
-    app.db.conn.close()
-
+    try:
+        asyncio.run(app.discord.start())
+    except KeyboardInterrupt:
+        sys.exit()
 
 if __name__ == "__main__":
     main()

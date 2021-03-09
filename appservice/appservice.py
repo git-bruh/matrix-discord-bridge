@@ -2,16 +2,17 @@ import asyncio
 import json
 import logging
 import os
-import sqlite3
 import threading
-import time
 import sys
 import uuid
 import urllib3
 import bottle
+import db
+import discord
 import websockets
-from dataclasses import dataclass
+import matrix
 from typing import Union
+from db import DataBase
 
 
 def config_gen(config_file: str) -> dict:
@@ -34,76 +35,6 @@ def config_gen(config_file: str) -> dict:
 
 
 config = config_gen("config.json")
-
-
-class DataBase(object):
-    def __init__(self, db_file) -> None:
-        self.create(db_file)
-
-    def create(self, db_file) -> None:
-        exists = os.path.exists(db_file)
-
-        self.conn = sqlite3.connect(db_file)
-        self.conn.row_factory = self.dict_factory
-
-        self.cur = self.conn.cursor()
-
-        if exists:
-            return
-
-        self.execute(
-            "CREATE TABLE bridge(room_id TEXT PRIMARY KEY, channel_id INT);"
-        )
-
-        self.execute(
-            "CREATE TABLE users(mxid TEXT PRIMARY KEY, "
-            "avatar_url TEXT, username TEXT);"
-        )
-
-    def dict_factory(self, cursor, row):
-        # https://docs.python.org/3/library/sqlite3.html#sqlite3.Connection.row_factory
-
-        d = {}
-        for idx, col in enumerate(cursor.description):
-            d[col[0]] = row[idx]
-        return d
-
-    def execute(self, operation: str) -> None:
-        self.cur.execute(operation) # TODO remove this useless function
-        self.conn.commit()
-
-    def add_room(self, room_id: str, channel_id: int) -> None:
-        self.execute(
-            "INSERT INTO bridge (room_id, channel_id) "
-            f"VALUES ('{room_id}', {channel_id})"
-        )
-
-    def add_user(self, mxid: str) -> None:
-        self.execute(f"INSERT INTO users (mxid) VALUES ('{mxid}')")
-
-    def get_channel(self, room_id: str) -> int:
-        self.cur.execute("SELECT channel_id FROM bridge WHERE room_id = ?", [room_id])
-
-        room = self.cur.fetchone()
-
-        # Return '0' if nothing is bridged.
-        return 0 if not room else room["channel_id"]
-
-    def list_channels(self) -> list:
-        self.execute("SELECT channel_id FROM bridge")
-
-        channels = self.cur.fetchall()
-
-        # Returns '[]' if nothing is bridged.
-        return [channel["channel_id"] for channel in channels]
-
-    def query_user(self, mxid: str) -> bool:
-        self.execute("SELECT mxid FROM users")
-
-        users = self.cur.fetchall()
-
-        return next((True for user in users if user["mxid"] == mxid), False)
-
 
 class AppService(bottle.Bottle):
     def __init__(self) -> None:
@@ -166,22 +97,7 @@ class AppService(bottle.Bottle):
 
         return False
 
-    @dataclass
-    class Event(object):
-        body: str
-        channel_id: int
-        event_id: str
-        is_direct: bool
-        homeserver: str
-        room_id: str
-        sender: str
-
-    @dataclass
-    class User(object):
-        avatar_url: str
-        display_name: str
-
-    def get_event_object(self, event: dict) -> Event:
+    def get_event_object(self, event: dict) -> matrix.Event:
         content = event.get("content")
 
         body       = content.get("body")
@@ -192,14 +108,14 @@ class AppService(bottle.Bottle):
         sender     = event.get("sender")
         channel_id = self.db.get_channel(room_id)
 
-        return self.Event(
+        return matrix.Event(
             body, channel_id, event_id, is_direct, homeserver, room_id, sender
         )
 
-    async def get_user_object(self, mxid: str) -> User:
+    async def get_user_object(self, mxid: str) -> matrix.User:
         avatar_url, display_name = await self.get_profile(mxid)
 
-        return self.User(avatar_url, display_name)
+        return matrix.User(avatar_url, display_name)
 
     async def handle_member(self, event: dict) -> None:
         event = self.get_event_object(event)
@@ -213,7 +129,7 @@ class AppService(bottle.Bottle):
             logging.info(f"Joining direct message room {event.room_id}")
             await self.join_room(event.room_id)
 
-    async def handle_bridge(self, message: Event) -> None:
+    async def handle_bridge(self, message: matrix.Event) -> None:
         try:
             channel = int(message.body.split()[1])
         except ValueError:
@@ -391,59 +307,7 @@ class DiscordClient(object):
         self.app   = appservice
         self.token = config["discord_token"]
 
-    class InteractionResponseType(object):
-        PONG                        = 0
-        ACKNOWLEDGE                 = 1
-        CHANNEL_MESSAGE             = 2
-        CHANNEL_MESSAGE_WITH_SOURCE = 4
-        ACKNOWLEDGE_WITH_SOURCE     = 5
-
-    class GatewayIntents(object):
-        def bitmask(bit: int) -> int:
-            return 1 << bit
-
-        GUILDS                   = bitmask(0)
-        GUILD_MEMBERS            = bitmask(1)
-        GUILD_BANS               = bitmask(2)
-        GUILD_EMOJIS             = bitmask(3)
-        GUILD_INTEGRATIONS       = bitmask(4)
-        GUILD_WEBHOOKS           = bitmask(5)
-        GUILD_INVITES            = bitmask(6)
-        GUILD_VOICE_STATES       = bitmask(7)
-        GUILD_PRESENCES          = bitmask(8)
-        GUILD_MESSAGES           = bitmask(9)
-        GUILD_MESSAGE_REACTIONS  = bitmask(10)
-        GUILD_MESSAGE_TYPING     = bitmask(11)
-        DIRECT_MESSAGES          = bitmask(12)
-        DIRECT_MESSAGE_REACTIONS = bitmask(13)
-        DIRECT_MESSAGE_TYPING    = bitmask(14)
-
-    class GatewayOpCodes(object):
-        DISPATCH              = 0
-        HEARTBEAT             = 1
-        IDENTIFY              = 2
-        PRESENCE_UPDATE       = 3
-        VOICE_STATE_UPDATE    = 4
-        RESUME                = 6
-        RECONNECT             = 7
-        REQUEST_GUILD_MEMBERS = 8
-        INVALID_SESSION       = 9
-        HELLO                 = 10
-        HEARTBEAT_ACK         = 11
-
-    class Payloads(GatewayIntents, GatewayOpCodes):
-        def __init__(self):
-            # TODO: Use updated seqnum
-            self.HEARTBEAT = {"op": self.HEARTBEAT, "d": 0}
-
-            self.IDENTIFY = {
-                "op": self.IDENTIFY,
-                "d": {"token": config["discord_token"], "intents":
-                      self.GUILDS |
-                      self.GUILD_MESSAGES,
-                      "properties": {"$os": "discord", "$browser": "discord",
-                      "$device": "discord"}}
-                }
+        self.Payloads = discord.Payloads(self.token)
 
     async def start(self):
         await self.gateway_handler(self.get_gateway_url())
@@ -451,7 +315,7 @@ class DiscordClient(object):
     async def heartbeat_handler(self, websocket, interval_ms: int) -> None:
         while True:
             await asyncio.sleep(interval_ms / 1000)
-            await websocket.send(json.dumps(self.Payloads().HEARTBEAT))
+            await websocket.send(json.dumps(self.Payloads.HEARTBEAT))
 
     async def gateway_handler(self, gateway_url: str) -> None:
         gateway_url += "/?v=8&encoding=json"
@@ -462,7 +326,7 @@ class DiscordClient(object):
 
                 opcode = data.get("op")
 
-                if opcode == self.GatewayOpCodes.DISPATCH:
+                if opcode == discord.GatewayOpCodes.DISPATCH:
                     otype = data.get("t")
                     if otype == "READY":
                         logging.info("READY")
@@ -479,7 +343,7 @@ class DiscordClient(object):
                     else:
                         logging.info(f"Unknown {otype}")
 
-                elif opcode == self.GatewayOpCodes.HELLO:
+                elif opcode == discord.GatewayOpCodes.HELLO:
                     heartbeat_interval = data_dict.get("heartbeat_interval")
                     logging.info(f"Heartbeat Interval: {heartbeat_interval}")
 
@@ -488,33 +352,16 @@ class DiscordClient(object):
                         websocket, heartbeat_interval
                     ))
 
-                    await websocket.send(json.dumps(self.Payloads().IDENTIFY))
+                    await websocket.send(json.dumps(self.Payloads.IDENTIFY))
 
-                elif opcode == self.GatewayOpCodes.HEARTBEAT_ACK:
+                elif opcode == discord.GatewayOpCodes.HEARTBEAT_ACK:
                     # NOP
                     pass
 
                 else:
                     logging.info(f"Unknown event:\n{json.dumps(data, indent=4)}")
 
-    @dataclass
-    class Member(object):
-        avatar_url: str
-        discriminator: str
-        id: str
-        username: str
-
-    class Message(object):
-        def __init__(self, attachments: list, author, content: str,
-                     channel_id: str, edited: bool, message_id: str) -> None:
-            self.attachments = attachments
-            self.author      = author
-            self.content     = content
-            self.channel_id  = channel_id
-            self.edited      = edited
-            self.id          = message_id
-
-    def get_member_object(self, author: dict) -> Member:
+    def get_member_object(self, author: dict) -> discord.User:
         author_id     = author.get("id")
         avatar        = author.get("avatar")
 
@@ -528,9 +375,9 @@ class DiscordClient(object):
         discriminator = author.get("discriminator")
         username      = author.get("username")
 
-        return self.Member(avatar_url, discriminator, author_id, username)
+        return discord.User(avatar_url, discriminator, author_id, username)
 
-    def get_message_object(self, message: dict) -> Message:
+    def get_message_object(self, message: dict) -> discord.Message:
         author = self.get_member_object(message.get("author"))
 
         attachments = message.get("attachments")
@@ -539,9 +386,9 @@ class DiscordClient(object):
         message_id  = message.get("id")
         edited      = True if message.get("edited_timestamp") else False
 
-        return self.Message(attachments, author, content, channel_id, edited, message_id)
+        return discord.Message(attachments, author, content, channel_id, edited, message_id)
 
-    def to_return(self, message: Message) -> bool:
+    def to_return(self, message: discord.Message) -> bool:
         if message.author.discriminator == "0000":
             return True
 
@@ -553,6 +400,10 @@ class DiscordClient(object):
         if self.to_return(message):
             return
 
+        if message.content.startswith("test"):
+            print(message.content)
+            self.send_webhook()
+
     def handle_deletion(self, message: dict) -> None:
         return
         # self.app.redact(message.get("id")) # message.get("channel_id")
@@ -563,14 +414,17 @@ class DiscordClient(object):
         if self.to_return(message):
             return
 
-    def send(self, method: str, path: str, content: dict = {}) -> dict:
+    def send(self, method: str, path: str, content: dict = {}, params: dict = {}) -> dict:
         endpoint = "https://discord.com/api/v8"
         headers  = {"Authorization": f"Bot {self.token}", "Content-Type": "application/json"}
 
         # 'body' being an empty dict breaks "GET" requests.
         content = json.dumps(content) if content else None
 
-        resp = self.app.manager.request(method, f"{endpoint}{path}", body=content, headers=headers)
+        resp = self.app.manager.request(method, f"{endpoint}{path}", body=content,
+                                        fields=params, headers=headers)
+        print(resp.status)
+        print(resp.data)
 
         return json.loads(resp.data)
 
@@ -582,6 +436,22 @@ class DiscordClient(object):
     def get_webhooks(self, channel_id: str) -> None:
         webhooks = self.send("GET", f"/channels/{channel_id}/webhooks")
         return [ {webhook["name"]: webhook["token"]} for webhook in webhooks ]
+
+    def send_webhook(self) -> str:
+        content = {"content": "Webhook testing", "username": "a2z",
+                   # Disable 'everyone' and 'role' mentions.
+                   "allowed_mentions": {"parse": ["users"]}}
+
+        # self.send("POST", f"/webhooks/{webhook_id}/{webhook_token}?wait=True", content)
+        # return resp.get("id")
+
+    def edit_webhook(self, message: str) -> None:
+        content = {"content": message}
+        # self.send("PATCH", f"/webhooks/{webhook_id}/{webhook_token}/messages/{message_id}", content)
+
+    def delete_webhook(self, message: str) -> None:
+        # self.send("DELETE", f"/webhooks/{webhook_id}/{webhook_token}/messages/{message_id})
+        pass
 
     def send_message(self, message: str, channel_id: str) -> None:
         self.send("POST", f"/channels/{channel_id}/messages", {"content": message})

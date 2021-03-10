@@ -8,6 +8,13 @@ class Channel(object):
     type: int
 
 @dataclass
+class User(object):
+    avatar_url: str
+    discriminator: str
+    id: str
+    username: str
+
+@dataclass
 class Message(object):
     attachments: list
     author: User
@@ -16,13 +23,6 @@ class Message(object):
     edited: bool
     message_id: str
     # TODO reference: str
-
-@dataclass
-class User(object):
-    avatar_url: str
-    discriminator: str
-    id: str
-    username: str
 
 class ChannelTypes(object):
     GUILD_TEXT     = 0

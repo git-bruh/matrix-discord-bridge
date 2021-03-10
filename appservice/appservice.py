@@ -18,10 +18,12 @@ from db import DataBase
 
 def config_gen(config_file: str) -> dict:
     config_dict = {
-        "as_token": "my-secret-token",
+        "as_token": "my-secret-as-token",
+        "hs_token": "my-secret-hs-token",
+        "user_id": "@appservice-discord:localhost",
         "homeserver": "http://127.0.0.1:8008",
         "discord_cmd_prefix": "/",
-        "discord_token": "my-secret-token",
+        "discord_token": "my-secret-discord-token",
         "database": "bridge.db"
     }
 
@@ -46,8 +48,10 @@ class AppService(bottle.Bottle):
             [-1].split(":")[0].replace("127.0.0.1", "localhost")
         self.db        = DataBase(config["database"])
         self.discord   = DiscordClient(self)
-        self.token     = config["as_token"]
         self.manager   = urllib3.PoolManager()
+        self.as_token  = config["as_token"]
+        self.hs_token  = config["hs_token"]
+        self.user_id   = config["user_id"]
 
         # Add route for bottle.
         self.route("/transactions/<transaction>",
@@ -56,22 +60,26 @@ class AppService(bottle.Bottle):
     def start(self):
         self.run(host="127.0.0.1", port=5000)
 
-        # TODO
-        logging.info("Closing database")
-
-        self.db.cur.close()
-        self.db.conn.close()
-
     def receive_event(self, transaction: str) -> dict:
         """
-        The homeserver hits this endpoint to send us new events.
+        Check whether the homeserver passed the correct token and handle events.
         """
+
+        hs_token = bottle.request.query.getone("access_token")
+
+        if not hs_token:
+            bottle.response.status = 401
+            return {"errcode": "DISCORD.APPSERVICE_UNAUTHORIZED"}
+
+        if hs_token != self.hs_token:
+            bottle.response.status = 403
+            return {"errcode": "DISCORD.APPSERVICE_FORBIDDEN"}
 
         events = bottle.request.json.get("events")
 
-        # TODO handle wrong HS token ?
-
         for event in events:
+            print(event)
+
             event_type = event.get("type")
 
             if event_type == "m.room.member":
@@ -85,7 +93,7 @@ class AppService(bottle.Bottle):
              content: Union[bytes, dict] = {}, params: dict = {},
              content_type: str = "application/json",
              endpoint: str = "/_matrix/client/r0") -> dict:
-        params["access_token"] = self.token
+        params["access_token"] = self.as_token
         headers  = {"Content-Type": content_type}
         content  = json.dumps(content) if type(content) == dict else content
         endpoint = f"{self.base_url}{endpoint}{path}?{urllib.parse.urlencode(params)}"
@@ -108,10 +116,11 @@ class AppService(bottle.Bottle):
         is_direct  = content.get("is_direct")
         room_id    = event.get("room_id")
         sender     = event.get("sender")
+        state_key  = event.get("state_key")
         channel_id = self.db.get_channel(room_id)
 
         return matrix.Event(
-            body, channel_id, event_id, is_direct, homeserver, room_id, sender
+            body, channel_id, event_id, is_direct, homeserver, room_id, sender, state_key
         )
 
     def get_user_object(self, mxid: str) -> matrix.User:
@@ -128,22 +137,26 @@ class AppService(bottle.Bottle):
     def handle_member(self, event: dict) -> None:
         event = self.get_event_object(event)
 
-        # Ignore invites from other homeservers.
-        if event.sender.split(":")[-1] != self.plain_url:
+        # Ignore events that aren't for us.
+        if event.sender.split(":")[-1] != self.plain_url or \
+                event.state_key != self.user_id or not event.is_direct:
             return
 
         # Join the direct message room.
-        if event.is_direct:
-            logging.info(f"Joining direct message room {event.room_id}")
-            self.join_room(event.room_id)
+        logging.info(f"Joining direct message room {event.room_id}")
+        self.join_room(event.room_id)
 
     def handle_bridge(self, message: matrix.Event) -> None:
+        # Ignore events that aren't for us.
+        if event.sender.split(":")[-1] != self.plain_url:
+            return
+
         try:
             channel = (message.body.split()[1])
         except ValueError:
             return
 
-        # See if the given channel is valid.
+        # Check if the given channel is valid.
         channel = self.discord.get_channel(channel)
         if not channel or channel.type != discord.ChannelTypes.GUILD_TEXT:
             return
@@ -165,6 +178,10 @@ class AppService(bottle.Bottle):
         self.discord.send_webhook(message, user)
 
     def register(self, mxid: str) -> str:
+        """
+        Register a dummy user on the Matrix homeserver.
+        """
+
         content = {"type": "m.login.application_service",
                    "username": mxid[1:-(len(self.app.plain_url) + 1)]}
 
@@ -176,6 +193,10 @@ class AppService(bottle.Bottle):
             return user_id
 
     def create_room(self, channel_id: int, sender: str):
+        """
+        Create a bridged room and invite the person who invoked the command.
+        """
+
         room_alias = f"discord_{channel_id}"
 
         content = {
@@ -361,10 +382,10 @@ class DiscordClient(object):
 
     def get_message_object(self, message: dict) -> discord.Message:
         author  = self.get_member_object(message.get("author"))  # TODO author is None
-        channel = message.get("channel_id")
 
         attachments = message.get("attachments")
         content     = message.get("content")
+        channel_id  = message.get("channel_id")
         message_id  = message.get("id")
         edited      = True if message.get("edited_timestamp") else False
 
@@ -389,7 +410,7 @@ class DiscordClient(object):
 
     def wrap(self, message: discord.Message) -> tuple:
         """
-        Returns the corresponding room ID and the puppet's mxid for
+        Get the corresponding room ID and the puppet's mxid for
         a given channel ID and a Discord user.
         """
 
@@ -441,7 +462,7 @@ class DiscordClient(object):
 
     def get_channel(self, channel_id: str) -> discord.Channel:
         """
-        Returns the corresponding `discord.Channel` object for a given channel ID.
+        Get the corresponding `discord.Channel` object for a given channel ID.
         """
 
         resp = self.send("GET", f"/channels/{channel_id}")

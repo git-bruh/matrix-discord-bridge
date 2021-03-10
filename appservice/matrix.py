@@ -9,6 +9,7 @@ class Event(object):
     homeserver: str
     room_id: str
     sender: str
+    state_key: str
 
 @dataclass
 class User(object):

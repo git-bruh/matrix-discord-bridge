@@ -1,11 +1,11 @@
 from dataclasses import dataclass
 
 @dataclass
-class User(object):
-    avatar_url: str
-    discriminator: str
+class Channel(object):
     id: str
-    username: str
+    name: str
+    topic: str
+    type: int
 
 @dataclass
 class Message(object):
@@ -15,6 +15,23 @@ class Message(object):
     channel_id: str
     edited: bool
     message_id: str
+    # TODO reference: str
+
+@dataclass
+class User(object):
+    avatar_url: str
+    discriminator: str
+    id: str
+    username: str
+
+class ChannelTypes(object):
+    GUILD_TEXT     = 0
+    DM             = 1
+    GUILD_VOICE    = 2
+    GROUP_DM       = 3
+    GUILD_CATEGORY = 4
+    GUILD_NEWS     = 5
+    GUILD_STORE    = 6
 
 class InteractionResponseType(object):
     PONG                        = 0

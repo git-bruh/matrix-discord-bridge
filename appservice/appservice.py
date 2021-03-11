@@ -45,14 +45,15 @@ class AppService(bottle.Bottle):
     def __init__(self) -> None:
         super(AppService, self).__init__()
 
-        self.base_url    = config["homeserver"]
-        self.db          = DataBase(config["database"])
-        self.discord     = DiscordClient(self)
-        self.manager     = urllib3.PoolManager()
         self.as_token    = config["as_token"]
         self.hs_token    = config["hs_token"]
+        self.base_url    = config["homeserver"]
         self.server_name = config["server_name"]
         self.user_id     = f"@{config['user_id']}:{self.server_name}"
+        self.db          = DataBase(config["database"])
+        self.discord     = DiscordClient(self)
+        self.logger      = logging.getLogger("appservice")
+        self.manager     = urllib3.PoolManager()
 
         # Add route for bottle.
         self.route("/transactions/<transaction>",
@@ -86,8 +87,10 @@ class AppService(bottle.Bottle):
                     self.handle_member(event)
                 elif event_type == "m.room.message":
                     self.handle_message(event)
-            except Exception as e:
-                logging.info(f"Unknown exception occured: {traceback.print_exc()}")
+            except Exception:
+                # Don't change the response code as the homeserver
+                # will keep trying to send us the same event and back off.
+                self.logger.exception("")
 
         return {}
 
@@ -131,7 +134,7 @@ class AppService(bottle.Bottle):
         return matrix.User(avatar_url, display_name)
 
     def to_return(self, event: dict) -> bool:
-        if event.get("sender").startswith("@_discord"):
+        if event.get("sender").startswith(("@_discord", self.user_id)):
             return True
 
         return False
@@ -145,17 +148,18 @@ class AppService(bottle.Bottle):
             return
 
         # Join the direct message room.
-        logging.info(f"Joining direct message room {event.room_id}")
+        self.logger.info(f"Joining direct message room {event.room_id}")
         self.join_room(event.room_id)
 
     def handle_bridge(self, message: matrix.Event) -> None:
         # Ignore events that aren't for us.
-        if message.sender.split(":")[-1] != self.server_name:
+        if message.sender.split(":")[-1] != self.server_name or \
+                not message.body.startswith("!bridge"):
             return
 
         try:
             channel = (message.body.split()[1])
-        except ValueError:
+        except IndexError:
             return
 
         # Check if the given channel is valid.
@@ -163,7 +167,7 @@ class AppService(bottle.Bottle):
         if not channel or channel.type != discord.ChannelTypes.GUILD_TEXT:
             return
 
-        logging.info(f"Creating bridged room for channel {channel.id}")
+        self.logger.info(f"Creating bridged room for channel {channel.id}")
 
         self.create_room(channel, message.sender)
 
@@ -180,7 +184,7 @@ class AppService(bottle.Bottle):
         if message.channel_id:
             self.discord.send_webhook(message, user)
 
-    def register(self, mxid: str) -> str:
+    def register(self, mxid: str) -> None:
         """
         Register a dummy user on the Matrix homeserver.
         """
@@ -190,12 +194,9 @@ class AppService(bottle.Bottle):
 
         resp = self.send("POST", "/register", content)
 
-        user_id = resp.get("user_id")
-        if user_id:
-            self.db.add_user(mxid)
-            return user_id
+        self.db.add_user(resp["user_id"])
 
-    def create_room(self, channel: discord.Channel, sender: str):
+    def create_room(self, channel: discord.Channel, sender: str) -> None:
         """
         Create a bridged room and invite the person who invoked the command.
         """
@@ -278,7 +279,7 @@ class AppService(bottle.Bottle):
         return resp.get("content_uri")
 
     def get_room_id(self, alias: str) -> str:
-        resp = self.send("GET", f"/directory/room/{alias.replace('#', '%23')}")
+        resp = self.send("GET", f"/directory/room/{urllib.parse.quote(alias)}")
 
         return resp.get("room_id")
 
@@ -288,7 +289,7 @@ class AppService(bottle.Bottle):
         resp = self.send("POST", f"/join/{room_id}", params=params)
 
     def send_invite(self, room_id: str, mxid: str) -> None:
-        logging.info(f"Inviting user {mxid} to room {room_id}")
+        self.logger.info(f"Inviting user {mxid} to room {room_id}")
 
         self.send("POST", f"/rooms/{room_id}/invite", {"user_id": mxid})
 
@@ -309,13 +310,13 @@ class AppService(bottle.Bottle):
 
 
 class DiscordClient(object):
-    def __init__(self, appservice) -> None:
-        self.app   = appservice
-        self.token = config["discord_token"]
-
+    def __init__(self, appservice: AppService) -> None:
+        self.app      = appservice
+        self.logger   = logging.getLogger("discord")
+        self.token    = config["discord_token"]
         self.Payloads = discord.Payloads(self.token)
 
-    async def start(self):
+    async def start(self) -> None:
         await self.gateway_handler(self.get_gateway_url())
 
     async def heartbeat_handler(self, websocket, interval_ms: int) -> None:
@@ -335,7 +336,7 @@ class DiscordClient(object):
                 if opcode == discord.GatewayOpCodes.DISPATCH:
                     otype = data.get("t")
                     if otype == "READY":
-                        logging.info("READY")
+                        self.logger.info("READY")
 
                     elif otype == "MESSAGE_CREATE":
                         self.handle_message(data_dict)
@@ -347,11 +348,11 @@ class DiscordClient(object):
                         self.handle_edit(data_dict)
 
                     else:
-                        logging.info(f"Unknown {otype}")
+                        self.logger.info(f"Unknown {otype}")
 
                 elif opcode == discord.GatewayOpCodes.HELLO:
                     heartbeat_interval = data_dict.get("heartbeat_interval")
-                    logging.info(f"Heartbeat Interval: {heartbeat_interval}")
+                    self.logger.info(f"Heartbeat Interval: {heartbeat_interval}")
 
                     # Send periodic hearbeats to gateway.
                     asyncio.ensure_future(self.heartbeat_handler(
@@ -365,7 +366,7 @@ class DiscordClient(object):
                     pass
 
                 else:
-                    logging.info(f"Unknown event:\n{json.dumps(data, indent=4)}")
+                    self.logger.info(f"Unknown event:\n{json.dumps(data, indent=4)}")
 
     def get_channel_object(self, channel: dict) -> discord.Channel:
         channel_id   = channel.get("id")
@@ -439,7 +440,7 @@ class DiscordClient(object):
         room_id = self.app.get_room_id(room_alias)  # TODO Cache
 
         if not self.app.db.query_user(mxid):
-            logging.info(f"Creating dummy user for Discord user {message.author.id}")
+            self.logger.info(f"Creating dummy user for Discord user {message.author.id}")
             self.app.register(mxid)
 
             self.app.set_nick(

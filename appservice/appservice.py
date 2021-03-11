@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import threading
+import traceback
 import sys
 import uuid
 import urllib3
@@ -20,8 +21,9 @@ def config_gen(config_file: str) -> dict:
     config_dict = {
         "as_token": "my-secret-as-token",
         "hs_token": "my-secret-hs-token",
-        "user_id": "@appservice-discord:localhost",
+        "user_id": "appservice-discord",
         "homeserver": "http://127.0.0.1:8008",
+        "server_name": "localhost",
         "discord_cmd_prefix": "/",
         "discord_token": "my-secret-discord-token",
         "database": "bridge.db"
@@ -43,15 +45,14 @@ class AppService(bottle.Bottle):
     def __init__(self) -> None:
         super(AppService, self).__init__()
 
-        self.base_url  = config["homeserver"]
-        self.plain_url = self.base_url.split("://") \
-            [-1].split(":")[0].replace("127.0.0.1", "localhost")
-        self.db        = DataBase(config["database"])
-        self.discord   = DiscordClient(self)
-        self.manager   = urllib3.PoolManager()
-        self.as_token  = config["as_token"]
-        self.hs_token  = config["hs_token"]
-        self.user_id   = config["user_id"]
+        self.base_url    = config["homeserver"]
+        self.db          = DataBase(config["database"])
+        self.discord     = DiscordClient(self)
+        self.manager     = urllib3.PoolManager()
+        self.as_token    = config["as_token"]
+        self.hs_token    = config["hs_token"]
+        self.server_name = config["server_name"]
+        self.user_id     = f"@{config['user_id']}:{self.server_name}"
 
         # Add route for bottle.
         self.route("/transactions/<transaction>",
@@ -78,14 +79,15 @@ class AppService(bottle.Bottle):
         events = bottle.request.json.get("events")
 
         for event in events:
-            print(event)
-
             event_type = event.get("type")
 
-            if event_type == "m.room.member":
-                self.handle_member(event)
-            elif event_type == "m.room.message":
-                self.handle_message(event)
+            try:
+                if event_type == "m.room.member":
+                    self.handle_member(event)
+                elif event_type == "m.room.message":
+                    self.handle_message(event)
+            except Exception as e:
+                logging.info(f"Unknown exception occured: {traceback.print_exc()}")
 
         return {}
 
@@ -138,7 +140,7 @@ class AppService(bottle.Bottle):
         event = self.get_event_object(event)
 
         # Ignore events that aren't for us.
-        if event.sender.split(":")[-1] != self.plain_url or \
+        if event.sender.split(":")[-1] != self.server_name or \
                 event.state_key != self.user_id or not event.is_direct:
             return
 
@@ -148,7 +150,7 @@ class AppService(bottle.Bottle):
 
     def handle_bridge(self, message: matrix.Event) -> None:
         # Ignore events that aren't for us.
-        if event.sender.split(":")[-1] != self.plain_url:
+        if message.sender.split(":")[-1] != self.server_name:
             return
 
         try:
@@ -161,7 +163,7 @@ class AppService(bottle.Bottle):
         if not channel or channel.type != discord.ChannelTypes.GUILD_TEXT:
             return
 
-        logging.info(f"Creating bridged room for channel {channel}")
+        logging.info(f"Creating bridged room for channel {channel.id}")
 
         self.create_room(channel, message.sender)
 
@@ -169,13 +171,14 @@ class AppService(bottle.Bottle):
         message = self.get_event_object(event)
         user    = self.get_user_object(message.sender)
 
-        if self.to_return(event) or not message.body or not message.channel_id:
+        if self.to_return(event) or not message.body:
             return
 
         # Handle bridging commands.
         self.handle_bridge(message)
 
-        self.discord.send_webhook(message, user)
+        if message.channel_id:
+            self.discord.send_webhook(message, user)
 
     def register(self, mxid: str) -> str:
         """
@@ -192,15 +195,14 @@ class AppService(bottle.Bottle):
             self.db.add_user(mxid)
             return user_id
 
-    def create_room(self, channel_id: int, sender: str):
+    def create_room(self, channel: discord.Channel, sender: str):
         """
         Create a bridged room and invite the person who invoked the command.
         """
 
-        room_alias = f"discord_{channel_id}"
-
         content = {
-            "visibility": "private", "room_alias_name": room_alias,
+            "room_alias_name": f"discord_{channel.id}", "name": channel.name,
+            "topic": channel.topic, "is_direct": False, "visibility": "private",
             "invite": [sender], "creation_content": {"m.federate": True},
             "initial_state": [
                 {"type": "m.room.join_rules",
@@ -212,7 +214,7 @@ class AppService(bottle.Bottle):
 
         resp = self.send("POST", "/createRoom", content)
 
-        self.db.add_room(resp["room_id"], channel_id)
+        self.db.add_room(resp["room_id"], channel.id)
 
     def get_profile(self, mxid: str) -> tuple:
         resp = self.send("GET", f"/profile/{mxid}")
@@ -381,7 +383,13 @@ class DiscordClient(object):
         return discord.User(avatar_url, discriminator, author_id, username)
 
     def get_message_object(self, message: dict) -> discord.Message:
-        author  = self.get_member_object(message.get("author"))  # TODO author is None
+        author = message.get("author")
+
+        # TODO embeds dont have authors
+        if not author:
+            return
+
+        author = self.get_member_object(message.get("author"))
 
         attachments = message.get("attachments")
         content     = message.get("content")
@@ -401,7 +409,8 @@ class DiscordClient(object):
     def handle_message(self, message: dict) -> None:
         message = self.get_message_object(message)
 
-        if self.to_return(message):
+        # TODO embed
+        if not message or self.to_return(message):
             return
 
         mxid, room_id = self.wrap(message)

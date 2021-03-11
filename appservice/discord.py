@@ -15,16 +15,21 @@ class User(object):
     username: str
 
 @dataclass
+class MessageReference(object):
+    message_id: str
+
+@dataclass
 class Message(object):
     attachments: list
     author: User
     content: str
     channel_id: str
     edited: bool
+    embeds: list
     message_id: str
-    # TODO reference: str
+    reference: MessageReference
 
-class ChannelTypes(object):
+class ChannelType(object):
     GUILD_TEXT     = 0
     DM             = 1
     GUILD_VOICE    = 2

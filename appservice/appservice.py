@@ -3,7 +3,6 @@ import json
 import logging
 import os
 import threading
-import traceback
 import sys
 import uuid
 import urllib3
@@ -164,7 +163,7 @@ class AppService(bottle.Bottle):
 
         # Check if the given channel is valid.
         channel = self.discord.get_channel(channel)
-        if not channel or channel.type != discord.ChannelTypes.GUILD_TEXT:
+        if not channel or channel.type != discord.ChannelType.GUILD_TEXT:
             return
 
         self.logger.info(f"Creating bridged room for channel {channel.id}")
@@ -392,6 +391,11 @@ class DiscordClient(object):
 
         return discord.User(avatar_url, discriminator, author_id, username)
 
+    def get_message_reference_object(self, reference: dict) -> discord.MessageReference:
+        message_id = reference.get("message_id")
+
+        return discord.MessageReference(message_id)
+
     def get_message_object(self, message: dict) -> discord.Message:
         embeds      = message.get("embeds")
         author      = self.get_member_object(message.get("author")) if not embeds else None
@@ -400,9 +404,11 @@ class DiscordClient(object):
         channel_id  = message.get("channel_id")
         edited      = True if message.get("edited_timestamp") else False
         message_id  = message.get("id")
+        reference   = message.get("message_reference")
+        reference   = self.get_message_reference_object(reference) if reference else None
 
         return discord.Message(
-            attachments, author, content, channel_id, edited, embeds, message_id
+            attachments, author, content, channel_id, edited, embeds, message_id, reference
         )
 
     def to_return(self, message: discord.Message) -> bool:

@@ -242,19 +242,29 @@ class AppService(bottle.Bottle):
             if content["content"]["membership"] == "join"
         ]
 
-    def set_nick(self, nickname: str, mxid: str) -> None:
-        self.send(
+    def set_nick(self, username: str, mxid: str) -> None:
+        resp = self.send(
             "PUT", f"/profile/{mxid}/displayname",
             {"displayname": nickname}, params={"user_id": mxid}
         )
 
-    def set_avatar(self, avatar_uri: str, mxid: str) -> None:
+        self.db.add_username(username, mxid)
+
+    def set_avatar(self, avatar_url: str, mxid: str) -> None:
+        avatar_uri = self.upload(avatar_url)
+
         self.send(
             "PUT", f"/profile/{mxid}/avatar_url", {"avatar_url": avatar_uri},
             params={"user_id": mxid}
         )
 
+        self.db.add_avatar(avatar_url, mxid)
+
     def upload(self, url: str) -> str:
+        """
+        Upload a file to the Matrix homeserver.
+        """
+
         resp = self.manager.request("GET", url)
 
         content_type, file = resp.headers.get("Content-Type"), resp.data
@@ -435,7 +445,8 @@ class DiscordClient(object):
             self.app.set_nick(
                 f"{message.author.username}#{message.author.discriminator}", mxid
             )
-            self.app.set_avatar(self.app.upload(message.author.avatar_url), mxid)            
+
+            self.app.set_avatar(message.author.avatar_url, mxid)
 
         if mxid not in self.app.get_members(room_id):  # TODO cache
             self.app.send_invite(room_id, mxid)

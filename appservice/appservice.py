@@ -189,7 +189,8 @@ class AppService(bottle.Bottle):
         """
 
         content = {"type": "m.login.application_service",
-                   "username": mxid[1:-(len(self.app.plain_url) + 1)]}
+                   # "@test:localhost" -> "test" (Can't register with an mxid.)
+                   "username": mxid[1:-len(self.server_name) -1]}
 
         resp = self.send("POST", "/register", content)
 
@@ -245,7 +246,7 @@ class AppService(bottle.Bottle):
     def set_nick(self, username: str, mxid: str) -> None:
         resp = self.send(
             "PUT", f"/profile/{mxid}/displayname",
-            {"displayname": nickname}, params={"user_id": mxid}
+            {"displayname": username}, params={"user_id": mxid}
         )
 
         self.db.add_username(username, mxid)
@@ -424,10 +425,10 @@ class DiscordClient(object):
         a given channel ID and a Discord user.
         """
 
-        mxid = f"@_discord_{message.author.id}:{self.app.plain_url}"
-        room_alias = f"#discord_{message.channel_id}:{self.app.plain_url}"
+        mxid = f"@_discord_{message.author.id}:{self.app.server_name}"
+        room_alias = f"#discord_{message.channel_id}:{self.app.server_name}"
 
-        room_id = self.app.get_room_id(room_alias)  # TODO Cache
+        room_id = self.app.get_room_id(room_alias)  # TODO Cache ?
 
         if not self.app.db.query_user(mxid):
             self.logger.info(f"Creating dummy user for Discord user {message.author.id}")
@@ -439,7 +440,7 @@ class DiscordClient(object):
 
             self.app.set_avatar(message.author.avatar_url, mxid)
 
-        if mxid not in self.app.get_members(room_id):  # TODO cache
+        if mxid not in self.app.get_members(room_id):  # TODO Cache ?
             self.app.send_invite(room_id, mxid)
             self.app.join_room(room_id, mxid)
 
@@ -490,7 +491,7 @@ class DiscordClient(object):
 
         return self.get_channel_object(resp)
 
-    def get_webhooks(self, channel_id: str) -> None:
+    def get_webhooks(self, channel_id: str) -> dict:
         webhooks = self.send("GET", f"/channels/{channel_id}/webhooks")
         return [{webhook["name"]: webhook["token"]} for webhook in webhooks]
 
@@ -498,8 +499,6 @@ class DiscordClient(object):
         content = {"content": content, "username": user.display_name,
                    # Disable 'everyone' and 'role' mentions.
                    "allowed_mentions": {"parse": ["users"]}}
-
-        return
 
         # self.send("POST", f"/webhooks/{webhook_id}/{webhook_token}?wait=True", content)
         # return resp.get("id")

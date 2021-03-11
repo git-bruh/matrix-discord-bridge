@@ -325,8 +325,7 @@ class DiscordClient(object):
             await websocket.send(json.dumps(self.Payloads.HEARTBEAT))
 
     async def gateway_handler(self, gateway_url: str) -> None:
-        gateway_url += "/?v=8&encoding=json"
-        async with websockets.connect(gateway_url) as websocket:
+        async with websockets.connect(f"{gateway_url}/?v=8&encoding=json") as websocket:
             async for message in websocket:
                 data      = json.loads(message)
                 data_dict = data.get("d")
@@ -348,7 +347,7 @@ class DiscordClient(object):
                         self.handle_edit(data_dict)
 
                     else:
-                        self.logger.info(f"Unknown {otype}")
+                        self.logger.info(f"Unknown opcode: {otype}")
 
                 elif opcode == discord.GatewayOpCodes.HELLO:
                     heartbeat_interval = data_dict.get("heartbeat_interval")
@@ -394,39 +393,24 @@ class DiscordClient(object):
         return discord.User(avatar_url, discriminator, author_id, username)
 
     def get_message_object(self, message: dict) -> discord.Message:
-        author = message.get("author")
-
-        # TODO embeds dont have authors
-        if not author:
-            return
-
-        author = self.get_member_object(message.get("author"))
-
+        embeds      = message.get("embeds")
+        author      = self.get_member_object(message.get("author")) if not embeds else None
         attachments = message.get("attachments")
         content     = message.get("content")
         channel_id  = message.get("channel_id")
-        message_id  = message.get("id")
         edited      = True if message.get("edited_timestamp") else False
+        message_id  = message.get("id")
 
-        return discord.Message(attachments, author, content, channel_id, edited, message_id)
+        return discord.Message(
+            attachments, author, content, channel_id, edited, embeds, message_id
+        )
 
     def to_return(self, message: discord.Message) -> bool:
-        if message.channel_id not in self.app.db.list_channels() or \
+        if message.embeds or message.channel_id not in self.app.db.list_channels() or \
                 message.author.discriminator == "0000":
             return True
 
         return False
-
-    def handle_message(self, message: dict) -> None:
-        message = self.get_message_object(message)
-
-        # TODO embed
-        if not message or self.to_return(message):
-            return
-
-        mxid, room_id = self.wrap(message)
-
-        self.app.send_message(room_id, message.content, mxid)
 
     def wrap(self, message: discord.Message) -> tuple:
         """
@@ -454,6 +438,16 @@ class DiscordClient(object):
             self.app.join_room(room_id, mxid)
 
         return mxid, room_id
+
+    def handle_message(self, message: dict) -> None:
+        message = self.get_message_object(message)
+
+        if self.to_return(message):
+            return
+
+        mxid, room_id = self.wrap(message)
+
+        self.app.send_message(room_id, message.content, mxid)
 
     def handle_deletion(self, message: dict) -> None:
         return

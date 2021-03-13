@@ -202,7 +202,8 @@ class AppService(bottle.Bottle):
         self.handle_bridge(message)
 
         if message.channel_id:
-            self.discord.send_webhook(message, user)
+            webhook = self.discord.get_webhook(message.channel_id, "matrix_bridge")
+            self.discord.send_webhook(message.body, user, webhook)
 
     def register(self, mxid: str) -> None:
         """
@@ -570,10 +571,10 @@ class DiscordClient(object):
 
         return self.get_channel_object(resp)
 
-    def create_webhook(self, channel_id: str, name: str) -> str:
+    def create_webhook(self, channel_id: str, name: str) -> tuple:
         """
         Create a webhook with the specified name in a given channel
-        and get it's ID.
+        and get it's ID and token.
         """
 
         resp = self.send(

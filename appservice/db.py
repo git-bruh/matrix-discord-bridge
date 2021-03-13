@@ -2,6 +2,7 @@ import os
 import sqlite3
 import threading
 
+
 class DataBase(object):
     def __init__(self, db_file) -> None:
         self.create(db_file)
@@ -57,7 +58,6 @@ class DataBase(object):
             )
             self.conn.commit()
 
-
     def add_user(self, mxid: str) -> None:
         with self.lock:
             self.cur.execute(f"INSERT INTO users (mxid) VALUES ('{mxid}')")
@@ -66,14 +66,16 @@ class DataBase(object):
     def add_avatar(self, avatar_url: str, mxid: str) -> None:
         with self.lock:
             self.cur.execute(
-                f"UPDATE users SET avatar_url = '{avatar_url}' where mxid = '{mxid}'"
+                f"UPDATE users SET avatar_url = '{avatar_url}'"
+                f"WHERE mxid = '{mxid}'"
             )
             self.conn.commit()
 
     def add_username(self, username: str, mxid: str) -> None:
         with self.lock:
             self.cur.execute(
-                f"UPDATE users SET username = '{username}' where mxid = '{mxid}'"
+                f"UPDATE users SET username = '{username}'"
+                f"WHERE mxid = '{mxid}'"
             )
             self.conn.commit()
 
@@ -83,7 +85,9 @@ class DataBase(object):
         """
 
         with self.lock:
-            self.cur.execute("SELECT channel_id FROM bridge WHERE room_id = ?", [room_id])
+            self.cur.execute(
+                "SELECT channel_id FROM bridge WHERE room_id = ?", [room_id]
+            )
 
             room = self.cur.fetchone()
 

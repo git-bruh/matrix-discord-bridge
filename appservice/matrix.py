@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 
+
 @dataclass
 class Event(object):
     body: str
@@ -10,6 +11,7 @@ class Event(object):
     room_id: str
     sender: str
     state_key: str
+
 
 @dataclass
 class User(object):

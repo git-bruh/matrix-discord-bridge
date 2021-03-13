@@ -2,17 +2,18 @@ import asyncio
 import json
 import logging
 import os
-import threading
 import sys
-import uuid
-import urllib3
+import threading
 import urllib.parse
-import bottle
-import db
-import discord
-import websockets
-import matrix
+import uuid
 from typing import Union
+
+import bottle
+import urllib3
+import websockets
+
+import discord
+import matrix
 from db import DataBase
 
 
@@ -25,7 +26,7 @@ def config_gen(config_file: str) -> dict:
         "server_name": "localhost",
         "discord_cmd_prefix": "/",
         "discord_token": "my-secret-discord-token",
-        "database": "bridge.db"
+        "database": "bridge.db",
     }
 
     if not os.path.exists(config_file):
@@ -40,30 +41,34 @@ def config_gen(config_file: str) -> dict:
 
 config = config_gen("config.json")
 
+
 class AppService(bottle.Bottle):
     def __init__(self) -> None:
         super(AppService, self).__init__()
 
-        self.as_token    = config["as_token"]
-        self.hs_token    = config["hs_token"]
-        self.base_url    = config["homeserver"]
+        self.as_token = config["as_token"]
+        self.hs_token = config["hs_token"]
+        self.base_url = config["homeserver"]
         self.server_name = config["server_name"]
-        self.user_id     = f"@{config['user_id']}:{self.server_name}"
-        self.db          = DataBase(config["database"])
-        self.discord     = DiscordClient(self)
-        self.logger      = logging.getLogger("appservice")
-        self.manager     = urllib3.PoolManager()
+        self.user_id = f"@{config['user_id']}:{self.server_name}"
+        self.db = DataBase(config["database"])
+        self.discord = DiscordClient(self)
+        self.logger = logging.getLogger("appservice")
+        self.manager = urllib3.PoolManager()
 
         # Add route for bottle.
-        self.route("/transactions/<transaction>",
-                   callback=self.receive_event, method="PUT")
+        self.route(
+            "/transactions/<transaction>",
+            callback=self.receive_event,
+            method="PUT",
+        )
 
     def start(self):
         self.run(host="127.0.0.1", port=5000)
 
     def receive_event(self, transaction: str) -> dict:
         """
-        Check whether the homeserver passed the correct token and handle events.
+        Verify the homeserver's token and handle events.
         """
 
         hs_token = bottle.request.query.getone("access_token")
@@ -93,16 +98,26 @@ class AppService(bottle.Bottle):
 
         return {}
 
-    def send(self, method: str, path: str = "",
-             content: Union[bytes, dict] = {}, params: dict = {},
-             content_type: str = "application/json",
-             endpoint: str = "/_matrix/client/r0") -> dict:
+    def send(
+        self,
+        method: str,
+        path: str = "",
+        content: Union[bytes, dict] = {},
+        params: dict = {},
+        content_type: str = "application/json",
+        endpoint: str = "/_matrix/client/r0",
+    ) -> dict:
         params["access_token"] = self.as_token
-        headers  = {"Content-Type": content_type}
-        content  = json.dumps(content) if type(content) == dict else content
-        endpoint = f"{self.base_url}{endpoint}{path}?{urllib.parse.urlencode(params)}"
+        headers = {"Content-Type": content_type}
+        content = json.dumps(content) if type(content) == dict else content
+        endpoint = (
+            f"{self.base_url}{endpoint}{path}?"
+            f"{urllib.parse.urlencode(params)}"
+        )
 
-        resp = self.manager.request(method, endpoint, body=content, headers=headers)
+        resp = self.manager.request(
+            method, endpoint, body=content, headers=headers
+        )
 
         # if resp.status == 429:
         # handle rate limit ?
@@ -114,17 +129,24 @@ class AppService(bottle.Bottle):
     def get_event_object(self, event: dict) -> matrix.Event:
         content = event.get("content")
 
-        body       = content.get("body")
-        event_id   = event.get("event_id")
+        body = content.get("body")
+        event_id = event.get("event_id")
         homeserver = event.get("sender").split(":")[-1]
-        is_direct  = content.get("is_direct")
-        room_id    = event.get("room_id")
-        sender     = event.get("sender")
-        state_key  = event.get("state_key")
+        is_direct = content.get("is_direct")
+        room_id = event.get("room_id")
+        sender = event.get("sender")
+        state_key = event.get("state_key")
         channel_id = self.db.get_channel(room_id)
 
         return matrix.Event(
-            body, channel_id, event_id, is_direct, homeserver, room_id, sender, state_key
+            body,
+            channel_id,
+            event_id,
+            is_direct,
+            homeserver,
+            room_id,
+            sender,
+            state_key,
         )
 
     def get_user_object(self, mxid: str) -> matrix.User:
@@ -142,8 +164,11 @@ class AppService(bottle.Bottle):
         event = self.get_event_object(event)
 
         # Ignore events that aren't for us.
-        if event.sender.split(":")[-1] != self.server_name or \
-                event.state_key != self.user_id or not event.is_direct:
+        if (
+            event.sender.split(":")[-1] != self.server_name
+            or event.state_key != self.user_id
+            or not event.is_direct
+        ):
             return
 
         # Join the direct message room.
@@ -152,12 +177,13 @@ class AppService(bottle.Bottle):
 
     def handle_bridge(self, message: matrix.Event) -> None:
         # Ignore events that aren't for us.
-        if message.sender.split(":")[-1] != self.server_name or \
-                not message.body.startswith("!bridge"):
+        if message.sender.split(":")[
+            -1
+        ] != self.server_name or not message.body.startswith("!bridge"):
             return
 
         try:
-            channel = (message.body.split()[1])
+            channel = message.body.split()[1]
         except IndexError:
             return
 
@@ -172,7 +198,7 @@ class AppService(bottle.Bottle):
 
     def handle_message(self, event: dict) -> None:
         message = self.get_event_object(event)
-        user    = self.get_user_object(message.sender)
+        user = self.get_user_object(message.sender)
 
         if self.to_return(event) or not message.body:
             return
@@ -185,12 +211,14 @@ class AppService(bottle.Bottle):
 
     def register(self, mxid: str) -> None:
         """
-        Register a dummy user on the Matrix homeserver.
+        Register a dummy user on the homeserver.
         """
 
-        content = {"type": "m.login.application_service",
-                   # "@test:localhost" -> "test" (Can't register with an mxid.)
-                   "username": mxid[1:-len(self.server_name) -1]}
+        content = {
+            "type": "m.login.application_service",
+            # "@test:localhost" -> "test" (Can't register with an mxid.)
+            "username": mxid[1 : -len(self.server_name) - 1],
+        }
 
         resp = self.send("POST", "/register", content)
 
@@ -202,15 +230,23 @@ class AppService(bottle.Bottle):
         """
 
         content = {
-            "room_alias_name": f"discord_{channel.id}", "name": channel.name,
-            "topic": channel.topic, "is_direct": False, "visibility": "private",
-            "invite": [sender], "creation_content": {"m.federate": True},
+            "room_alias_name": f"discord_{channel.id}",
+            "name": channel.name,
+            "topic": channel.topic,
+            "visibility": "private",
+            "invite": [sender],
+            "creation_content": {"m.federate": True},
             "initial_state": [
-                {"type": "m.room.join_rules",
-                 "content": {"join_rule": "invite"}},
-                {"type": "m.room.history_visibility",
-                 "content": {"history_visibility": "shared"}}
-            ], "power_level_content_override": {"users": {sender: 100}}
+                {
+                    "type": "m.room.join_rules",
+                    "content": {"join_rule": "invite"},
+                },
+                {
+                    "type": "m.room.history_visibility",
+                    "content": {"history_visibility": "shared"},
+                },
+            ],
+            "power_level_content_override": {"users": {sender: 100}},
         }
 
         resp = self.send("POST", "/createRoom", content)
@@ -223,8 +259,10 @@ class AppService(bottle.Bottle):
         avatar_url = resp.get("avatar_url")
         avatar_url = avatar_url[6:].split("/")
         try:
-            avatar_url = f"{self.base_url}/_matrix/media/r0/download/" \
-                         f"{avatar_url[0]}/{avatar_url[1]}"
+            avatar_url = (
+                f"{self.base_url}/_matrix/media/r0/download/"
+                f"{avatar_url[0]}/{avatar_url[1]}"
+            )
         except IndexError:
             avatar_url = None
 
@@ -234,19 +272,23 @@ class AppService(bottle.Bottle):
 
     def get_members(self, room_id: str) -> list:
         resp = self.send(
-            "GET", f"/rooms/{room_id}/members",
-            params={"membership": "join", "not_membership": "leave"}
+            "GET",
+            f"/rooms/{room_id}/members",
+            params={"membership": "join", "not_membership": "leave"},
         )
 
         return [
-            content["sender"] for content in resp["chunk"]
+            content["sender"]
+            for content in resp["chunk"]
             if content["content"]["membership"] == "join"
         ]
 
     def set_nick(self, username: str, mxid: str) -> None:
-        resp = self.send(
-            "PUT", f"/profile/{mxid}/displayname",
-            {"displayname": username}, params={"user_id": mxid}
+        self.send(
+            "PUT",
+            f"/profile/{mxid}/displayname",
+            {"displayname": username},
+            params={"user_id": mxid},
         )
 
         self.db.add_username(username, mxid)
@@ -255,15 +297,17 @@ class AppService(bottle.Bottle):
         avatar_uri = self.upload(avatar_url)
 
         self.send(
-            "PUT", f"/profile/{mxid}/avatar_url", {"avatar_url": avatar_uri},
-            params={"user_id": mxid}
+            "PUT",
+            f"/profile/{mxid}/avatar_url",
+            {"avatar_url": avatar_uri},
+            params={"user_id": mxid},
         )
 
         self.db.add_avatar(avatar_url, mxid)
 
     def upload(self, url: str) -> str:
         """
-        Upload a file to the Matrix homeserver.
+        Upload a file to the homeserver.
         """
 
         resp = self.manager.request("GET", url)
@@ -271,9 +315,11 @@ class AppService(bottle.Bottle):
         content_type, file = resp.headers.get("Content-Type"), resp.data
 
         resp = self.send(
-            "POST", content=file, content_type=content_type,
+            "POST",
+            content=file,
+            content_type=content_type,
             params={"filename": f"{uuid.uuid4()}"},
-            endpoint="/_matrix/media/r0/upload"
+            endpoint="/_matrix/media/r0/upload",
         )
 
         return resp.get("content_uri")
@@ -286,7 +332,7 @@ class AppService(bottle.Bottle):
     def join_room(self, room_id: str, mxid: str = "") -> str:
         params = {"user_id": mxid} if mxid else {}
 
-        resp = self.send("POST", f"/join/{room_id}", params=params)
+        self.send("POST", f"/join/{room_id}", params=params)
 
     def send_invite(self, room_id: str, mxid: str) -> None:
         self.logger.info(f"Inviting user {mxid} to room {room_id}")
@@ -297,8 +343,10 @@ class AppService(bottle.Bottle):
         content = self.create_message_event(content)
 
         resp = self.send(
-            "PUT", f"/rooms/{room_id}/send/m.room.message/{uuid.uuid4()}",
-            content, params={"user_id": mxid}
+            "PUT",
+            f"/rooms/{room_id}/send/m.room.message/{uuid.uuid4()}",
+            content,
+            params={"user_id": mxid},
         )
 
         return resp.get("event_id")
@@ -311,9 +359,9 @@ class AppService(bottle.Bottle):
 
 class DiscordClient(object):
     def __init__(self, appservice: AppService) -> None:
-        self.app      = appservice
-        self.logger   = logging.getLogger("discord")
-        self.token    = config["discord_token"]
+        self.app = appservice
+        self.logger = logging.getLogger("discord")
+        self.token = config["discord_token"]
         self.Payloads = discord.Payloads(self.token)
 
     async def start(self) -> None:
@@ -325,9 +373,10 @@ class DiscordClient(object):
             await websocket.send(json.dumps(self.Payloads.HEARTBEAT))
 
     async def gateway_handler(self, gateway_url: str) -> None:
-        async with websockets.connect(f"{gateway_url}/?v=8&encoding=json") as websocket:
+        gateway_url += "/?v=8&encoding=json"
+        async with websockets.connect(gateway_url) as websocket:
             async for message in websocket:
-                data      = json.loads(message)
+                data = json.loads(message)
                 data_dict = data.get("d")
 
                 opcode = data.get("op")
@@ -351,12 +400,14 @@ class DiscordClient(object):
 
                 elif opcode == discord.GatewayOpCodes.HELLO:
                     heartbeat_interval = data_dict.get("heartbeat_interval")
-                    self.logger.info(f"Heartbeat Interval: {heartbeat_interval}")
+                    self.logger.info(
+                        f"Heartbeat Interval: {heartbeat_interval}"
+                    )
 
                     # Send periodic hearbeats to gateway.
-                    asyncio.ensure_future(self.heartbeat_handler(
-                        websocket, heartbeat_interval
-                    ))
+                    asyncio.ensure_future(
+                        self.heartbeat_handler(websocket, heartbeat_interval)
+                    )
 
                     await websocket.send(json.dumps(self.Payloads.IDENTIFY))
 
@@ -365,56 +416,72 @@ class DiscordClient(object):
                     pass
 
                 else:
-                    self.logger.info(f"Unknown event:\n{json.dumps(data, indent=4)}")
+                    self.logger.info(
+                        f"Unknown event:\n{json.dumps(data, indent=4)}"
+                    )
 
     def get_channel_object(self, channel: dict) -> discord.Channel:
-        channel_id   = channel.get("id")
+        channel_id = channel.get("id")
         channel_type = channel.get("type")
 
-        name  = channel.get("name")
+        name = channel.get("name")
         topic = channel.get("topic")
 
         return discord.Channel(channel_id, name, topic, channel_type)
 
     def get_member_object(self, author: dict) -> discord.User:
-        author_id     = author.get("id")
-        avatar        = author.get("avatar")
+        author_id = author.get("id")
+        avatar = author.get("avatar")
 
         if not avatar:
             avatar_url = None
         else:
             avatar_ext = "gif" if avatar.startswith("a_") else "png"
-            avatar_url = "https://cdn.discordapp.com/avatars/" \
-                         f"{author_id}/{avatar}.{avatar_ext}"
+            avatar_url = (
+                "https://cdn.discordapp.com/avatars/"
+                f"{author_id}/{avatar}.{avatar_ext}"
+            )
 
         discriminator = author.get("discriminator")
-        username      = author.get("username")
+        username = author.get("username")
 
         return discord.User(avatar_url, discriminator, author_id, username)
 
-    def get_message_reference_object(self, reference: dict) -> discord.MessageReference:
+    def get_message_ref_object(
+        self, reference: dict
+    ) -> discord.MessageReference:
         message_id = reference.get("message_id")
 
         return discord.MessageReference(message_id)
 
     def get_message_object(self, message: dict) -> discord.Message:
-        embeds      = message.get("embeds")
-        author      = self.get_member_object(message.get("author")) if not embeds else None
+        embeds = message.get("embeds")
+        author = self.get_message_object(message.get("author", {}))
         attachments = message.get("attachments")
-        content     = message.get("content")
-        channel_id  = message.get("channel_id")
-        edited      = True if message.get("edited_timestamp") else False
-        message_id  = message.get("id")
-        reference   = message.get("message_reference")
-        reference   = self.get_message_reference_object(reference) if reference else None
+        content = message.get("content")
+        channel_id = message.get("channel_id")
+        edited = True if message.get("edited_timestamp") else False
+        message_id = message.get("id")
+        reference = message.get("message_reference", {})
+        reference = self.get_message_ref_object(reference)
 
         return discord.Message(
-            attachments, author, content, channel_id, edited, embeds, message_id, reference
+            attachments,
+            author,
+            content,
+            channel_id,
+            edited,
+            embeds,
+            message_id,
+            reference,
         )
 
     def to_return(self, message: discord.Message) -> bool:
-        if message.embeds or message.channel_id not in self.app.db.list_channels() or \
-                message.author.discriminator == "0000":
+        if (
+            message.channel_id not in self.app.db.list_channels()
+            or message.embeds
+            or message.author.discriminator == "0000"
+        ):
             return True
 
         return False
@@ -431,11 +498,15 @@ class DiscordClient(object):
         room_id = self.app.get_room_id(room_alias)  # TODO Cache ?
 
         if not self.app.db.query_user(mxid):
-            self.logger.info(f"Creating dummy user for Discord user {message.author.id}")
+            self.logger.info(
+                f"Creating dummy user for Discord user {message.author.id}"
+            )
             self.app.register(mxid)
 
             self.app.set_nick(
-                f"{message.author.username}#{message.author.discriminator}", mxid
+                f"{message.author.username}#"
+                f"{message.author.discriminator}",
+                mxid,
             )
 
             self.app.set_avatar(message.author.avatar_url, mxid)
@@ -466,14 +537,24 @@ class DiscordClient(object):
         if self.to_return(message):
             return
 
-    def send(self, method: str, path: str, content: dict = {}, params: dict = {}) -> dict:
-        endpoint = f"https://discord.com/api/v8{path}?{urllib.parse.urlencode(params)}"
-        headers  = {"Authorization": f"Bot {self.token}", "Content-Type": "application/json"}
+    def send(
+        self, method: str, path: str, content: dict = {}, params: dict = {}
+    ) -> dict:
+        endpoint = (
+            f"https://discord.com/api/v8{path}?"
+            f"{urllib.parse.urlencode(params)}"
+        )
+        headers = {
+            "Authorization": f"Bot {self.token}",
+            "Content-Type": "application/json",
+        }
 
         # 'body' being an empty dict breaks "GET" requests.
         content = json.dumps(content) if content else None
 
-        resp = self.app.manager.request(method, f"{endpoint}{path}", body=content, headers=headers)
+        resp = self.app.manager.request(
+            method, f"{endpoint}{path}", body=content, headers=headers
+        )
 
         return json.loads(resp.data)
 
@@ -496,23 +577,31 @@ class DiscordClient(object):
         return [{webhook["name"]: webhook["token"]} for webhook in webhooks]
 
     def send_webhook(self, message: str, user: matrix.User) -> str:
-        content = {"content": content, "username": user.display_name,
-                   # Disable 'everyone' and 'role' mentions.
-                   "allowed_mentions": {"parse": ["users"]}}
+        content = {
+            "content": message,
+            "username": user.display_name,
+            # Disable 'everyone' and 'role' mentions.
+            "allowed_mentions": {"parse": ["users"]},
+        }
 
         # self.send("POST", f"/webhooks/{webhook_id}/{webhook_token}?wait=True", content)
         # return resp.get("id")
 
     def edit_webhook(self, message: str) -> None:
         content = {"content": message}
+
         # self.send("PATCH", f"/webhooks/{webhook_id}/{webhook_token}/messages/{message_id}", content)
 
     def delete_webhook(self, message: str) -> None:
         # self.send("DELETE", f"/webhooks/{webhook_id}/{webhook_token}/messages/{message_id})
+
         return
 
     def send_message(self, message: str, channel_id: str) -> None:
-        self.send("POST", f"/channels/{channel_id}/messages", {"content": message})
+        self.send(
+            "POST", f"/channels/{channel_id}/messages", {"content": message}
+        )
+
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
@@ -527,6 +616,7 @@ def main() -> None:
         asyncio.run(app.discord.start())
     except KeyboardInterrupt:
         sys.exit()
+
 
 if __name__ == "__main__":
     main()

@@ -114,34 +114,34 @@ class AppService(bottle.Bottle):
 
         resp = http.request(method, endpoint, body=content, headers=headers)
 
-        # if resp.status == 429:
-        # handle rate limit ?
-        # if resp.status < 200 or response.status >= 300:
-        # raise exception
+        # TODO handle failure
 
         return json.loads(resp.data)
 
     def get_event_object(self, event: dict) -> matrix.Event:
         content = event.get("content")
 
-        body = content.get("body")
-        event_id = event.get("event_id")
-        homeserver = event.get("sender").split(":")[-1]
-        is_direct = content.get("is_direct")
+        # Message edits.
+        if content.get("m.relates_to", {}).get("rel_type") == "m.replace":
+            relates_to = content.get("m.relates_to").get("event_id")
+            new_body = content.get("m.new_content").get("body")
+        else:
+            relates_to = new_body = None
+
         room_id = event.get("room_id")
-        sender = event.get("sender")
-        state_key = event.get("state_key")
-        channel_id = self.db.get_channel(room_id)
 
         return matrix.Event(
-            body,
-            channel_id,
-            event_id,
-            is_direct,
-            homeserver,
-            room_id,
-            sender,
-            state_key,
+            author=self.get_user_object(event.get("sender")),
+            body=content.get("body"),
+            channel_id=self.db.get_channel(room_id),
+            event_id=event.get("event_id"),
+            is_direct=content.get("is_direct"),
+            redacts=event.get("redacts"),
+            relates_to=relates_to,
+            room_id=room_id,
+            new_body=new_body,
+            sender=event.get("sender"),
+            state_key=event.get("state_key"),
         )
 
     def get_user_object(self, mxid: str) -> matrix.User:
@@ -184,7 +184,7 @@ class AppService(bottle.Bottle):
 
         # Check if the given channel is valid.
         channel = self.discord.get_channel(channel)
-        if not channel or channel.type != discord.ChannelType.GUILD_TEXT:
+        if channel.type != discord.ChannelType.GUILD_TEXT:
             return
 
         self.logger.info(f"Creating bridged room for channel {channel.id}")
@@ -193,7 +193,6 @@ class AppService(bottle.Bottle):
 
     def handle_message(self, event: dict) -> None:
         message = self.get_event_object(event)
-        user = self.get_user_object(message.sender)
 
         if self.to_return(event) or not message.body:
             return
@@ -201,9 +200,12 @@ class AppService(bottle.Bottle):
         # Handle bridging commands.
         self.handle_bridge(message)
 
-        if message.channel_id:
-            webhook = self.discord.get_webhook(message.channel_id, "matrix_bridge")
-            self.discord.send_webhook(message.body, user, webhook)
+        if not message.channel_id:
+            return
+
+        webhook = self.discord.get_webhook(message.channel_id, "matrix_bridge")
+
+        self.discord.send_webhook(message, webhook)
 
     def register(self, mxid: str) -> None:
         """
@@ -359,6 +361,7 @@ class DiscordClient(object):
         self.logger = logging.getLogger("discord")
         self.token = config["discord_token"]
         self.Payloads = discord.Payloads(self.token)
+        self.webhook_cache = {}
 
     async def start(self) -> None:
         await self.gateway_handler(self.get_gateway_url())
@@ -417,13 +420,12 @@ class DiscordClient(object):
                     )
 
     def get_channel_object(self, channel: dict) -> discord.Channel:
-        channel_id = channel.get("id")
-        channel_type = channel.get("type")
-
-        name = channel.get("name")
-        topic = channel.get("topic")
-
-        return discord.Channel(channel_id, name, topic, channel_type)
+        return discord.Channel(
+            id=channel.get("id"),
+            name=channel.get("name"),
+            topic=channel.get("topic"),
+            type=channel.get("type"),
+        )
 
     def get_member_object(self, author: dict) -> discord.User:
         author_id = author.get("id")
@@ -438,44 +440,24 @@ class DiscordClient(object):
                 f"{author_id}/{avatar}.{avatar_ext}"
             )
 
-        discriminator = author.get("discriminator")
-        username = author.get("username")
-
-        return discord.User(avatar_url, discriminator, author_id, username)
-
-    def get_message_ref_object(
-        self, reference: dict
-    ) -> discord.MessageReference:
-        message_id = reference.get("message_id")
-
-        return discord.MessageReference(message_id)
-
-    def get_message_object(self, message: dict) -> discord.Message:
-        embeds = message.get("embeds")
-        author = self.get_member_object(message.get("author", {}))
-        attachments = message.get("attachments")
-        content = message.get("content")
-        channel_id = message.get("channel_id")
-        edited = True if message.get("edited_timestamp") else False
-        message_id = message.get("id")
-        reference = message.get("message_reference", {})
-        reference = self.get_message_ref_object(reference)
-
-        return discord.Message(
-            attachments,
-            author,
-            content,
-            channel_id,
-            edited,
-            embeds,
-            message_id,
-            reference,
+        return discord.User(
+            avatar_url=avatar_url,
+            discriminator=author.get("discriminator"),
+            id=author_id,
+            username=author.get("username"),
         )
 
-    def get_webhook_object(
-        self, webhook_id: str, webhook_token: str
-    ) -> discord.Webhook:
-        return discord.Webhook(webhook_id, webhook_token)
+    def get_message_object(self, message: dict) -> discord.Message:
+        return discord.Message(
+            attachments=message.get("attachments"),
+            author=self.get_member_object(message.get("author", {})),
+            content=message.get("content"),
+            channel_id=message.get("channel_id"),
+            edited=True if message.get("edited_timestamp") else False,
+            embeds=message.get("embeds"),
+            message_id=message.get("id"),
+            reference=message.get("message_reference", {}).get("message_id"),
+        )
 
     def to_return(self, message: discord.Message) -> bool:
         if (
@@ -555,6 +537,8 @@ class DiscordClient(object):
 
         resp = http.request(method, endpoint, body=content, headers=headers)
 
+        # TODO handle failure
+
         return json.loads(resp.data)
 
     def get_gateway_url(self) -> str:
@@ -589,6 +573,11 @@ class DiscordClient(object):
         name in a given channel, create the webhook if it doesn't exist.
         """
 
+        # Check the cache first.
+        webhook = self.webhook_cache.get(channel_id)
+        if webhook:
+            return webhook
+
         webhooks = self.send("GET", f"/channels/{channel_id}/webhooks")
         webhook = next(
             (
@@ -602,14 +591,19 @@ class DiscordClient(object):
         if not webhook:
             webhook = self.create_webhook(channel_id, name)
 
-        return self.get_webhook_object(webhook[0], webhook[1])
+        webhook = discord.Webhook(id=webhook[0], token=webhook[1])
+
+        self.webhook_cache[channel_id] = webhook
+
+        return webhook
 
     def send_webhook(
-        self, message: str, user: matrix.User, webhook: discord.Webhook
-    ) -> str:
+        self, message: matrix.Event, webhook: discord.Webhook
+    ) -> None:
         content = {
-            "content": message,
-            "username": user.display_name,
+            "avatar_url": message.author.avatar_url,
+            "content": message.body[:2000],
+            "username": message.author.display_name,
             # Disable 'everyone' and 'role' mentions.
             "allowed_mentions": {"parse": ["users"]},
         }
@@ -621,17 +615,36 @@ class DiscordClient(object):
             {"wait": True},
         )
 
-        return self.get_message_object(resp)
+        message_cache[message.event_id] = resp.get("id")
 
-    def edit_webhook(self, message: str) -> None:
-        content = {"content": message}
+    def edit_webhook(
+        self, message: matrix.Event, webhook: discord.Webhook
+    ) -> None:
+        message_id = message_cache.get(message.event_id)
 
-        # self.send("PATCH", f"/webhooks/{webhook_id}/{webhook_token}/messages/{message_id}", content)
+        if not message_id:
+            return
 
-    def delete_webhook(self, message: str) -> None:
-        # self.send("DELETE", f"/webhooks/{webhook_id}/{webhook_token}/messages/{message_id})
+        content = {"content": message.body}
 
-        return
+        self.send(
+            "PATCH",
+            f"/webhooks/{webhook.id}/{webhook.token}/messages/{message_id}",
+            content,
+        )
+
+    def delete_webhook(
+        self, message: matrix.Event, webhook: discord.Webhook
+    ) -> None:
+        message_id = message_cache.get(message.redacts)
+
+        if not message_id:
+            return
+
+        self.send(
+            "DELETE",
+            f"/webhooks/{webhook.id}/{webhook.token}/messages/message_id",
+        )
 
     def send_message(self, message: str, channel_id: str) -> None:
         self.send(

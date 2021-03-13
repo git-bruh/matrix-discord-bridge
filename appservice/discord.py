@@ -24,11 +24,6 @@ class Webhook(object):
 
 
 @dataclass
-class MessageReference(object):
-    message_id: str
-
-
-@dataclass
 class Message(object):
     attachments: list
     author: User
@@ -37,7 +32,7 @@ class Message(object):
     edited: bool
     embeds: list
     message_id: str
-    reference: MessageReference
+    reference: str
 
 
 class ChannelType(object):

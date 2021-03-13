@@ -18,6 +18,12 @@ class User(object):
 
 
 @dataclass
+class Webhook(object):
+    id: str
+    token: str
+
+
+@dataclass
 class MessageReference(object):
     message_id: str
 

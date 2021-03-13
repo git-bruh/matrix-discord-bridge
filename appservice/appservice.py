@@ -41,6 +41,9 @@ def config_gen(config_file: str) -> dict:
 
 config = config_gen("config.json")
 
+message_cache = {}  # Used for edits and replies.
+http = urllib3.PoolManager()  # Used for sending requests.
+
 
 class AppService(bottle.Bottle):
     def __init__(self) -> None:
@@ -54,7 +57,6 @@ class AppService(bottle.Bottle):
         self.db = DataBase(config["database"])
         self.discord = DiscordClient(self)
         self.logger = logging.getLogger("appservice")
-        self.manager = urllib3.PoolManager()
 
         # Add route for bottle.
         self.route(
@@ -86,15 +88,10 @@ class AppService(bottle.Bottle):
         for event in events:
             event_type = event.get("type")
 
-            try:
-                if event_type == "m.room.member":
-                    self.handle_member(event)
-                elif event_type == "m.room.message":
-                    self.handle_message(event)
-            except Exception:
-                # Don't change the response code as the homeserver
-                # will keep trying to send us the same event and back off.
-                self.logger.exception("")
+            if event_type == "m.room.member":
+                self.handle_member(event)
+            elif event_type == "m.room.message":
+                self.handle_message(event)
 
         return {}
 
@@ -115,9 +112,7 @@ class AppService(bottle.Bottle):
             f"{urllib.parse.urlencode(params)}"
         )
 
-        resp = self.manager.request(
-            method, endpoint, body=content, headers=headers
-        )
+        resp = http.request(method, endpoint, body=content, headers=headers)
 
         # if resp.status == 429:
         # handle rate limit ?
@@ -310,7 +305,7 @@ class AppService(bottle.Bottle):
         Upload a file to the homeserver.
         """
 
-        resp = self.manager.request("GET", url)
+        resp = http.request("GET", url)
 
         content_type, file = resp.headers.get("Content-Type"), resp.data
 
@@ -456,7 +451,7 @@ class DiscordClient(object):
 
     def get_message_object(self, message: dict) -> discord.Message:
         embeds = message.get("embeds")
-        author = self.get_message_object(message.get("author", {}))
+        author = self.get_member_object(message.get("author", {}))
         attachments = message.get("attachments")
         content = message.get("content")
         channel_id = message.get("channel_id")
@@ -475,6 +470,11 @@ class DiscordClient(object):
             message_id,
             reference,
         )
+
+    def get_webhook_object(
+        self, webhook_id: str, webhook_token: str
+    ) -> discord.Webhook:
+        return discord.Webhook(webhook_id, webhook_token)
 
     def to_return(self, message: discord.Message) -> bool:
         if (
@@ -552,9 +552,7 @@ class DiscordClient(object):
         # 'body' being an empty dict breaks "GET" requests.
         content = json.dumps(content) if content else None
 
-        resp = self.app.manager.request(
-            method, f"{endpoint}{path}", body=content, headers=headers
-        )
+        resp = http.request(method, endpoint, body=content, headers=headers)
 
         return json.loads(resp.data)
 
@@ -572,11 +570,42 @@ class DiscordClient(object):
 
         return self.get_channel_object(resp)
 
-    def get_webhooks(self, channel_id: str) -> dict:
-        webhooks = self.send("GET", f"/channels/{channel_id}/webhooks")
-        return [{webhook["name"]: webhook["token"]} for webhook in webhooks]
+    def create_webhook(self, channel_id: str, name: str) -> str:
+        """
+        Create a webhook with the specified name in a given channel
+        and get it's ID.
+        """
 
-    def send_webhook(self, message: str, user: matrix.User) -> str:
+        resp = self.send(
+            "POST", f"/channels/{channel_id}/webhooks", {"name": name}
+        )
+
+        return resp["id"], resp["token"]
+
+    def get_webhook(self, channel_id: str, name: str) -> discord.Webhook:
+        """
+        Get the webhook object for the first webhook that matches the specified
+        name in a given channel, create the webhook if it doesn't exist.
+        """
+
+        webhooks = self.send("GET", f"/channels/{channel_id}/webhooks")
+        webhook = next(
+            (
+                (webhook["id"], webhook["token"])
+                for webhook in webhooks
+                if webhook["name"] == name
+            ),
+            None,
+        )
+
+        if not webhook:
+            webhook = self.create_webhook(channel_id, name)
+
+        return self.get_webhook_object(webhook[0], webhook[1])
+
+    def send_webhook(
+        self, message: str, user: matrix.User, webhook: discord.Webhook
+    ) -> str:
         content = {
             "content": message,
             "username": user.display_name,
@@ -584,8 +613,14 @@ class DiscordClient(object):
             "allowed_mentions": {"parse": ["users"]},
         }
 
-        # self.send("POST", f"/webhooks/{webhook_id}/{webhook_token}?wait=True", content)
-        # return resp.get("id")
+        resp = self.send(
+            "POST",
+            f"/webhooks/{webhook.id}/{webhook.token}",
+            content,
+            {"wait": True},
+        )
+
+        return self.get_message_object(resp)
 
     def edit_webhook(self, message: str) -> None:
         content = {"content": message}

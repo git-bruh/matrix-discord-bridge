@@ -33,6 +33,7 @@ class Message(object):
     embeds: list
     message_id: str
     reference: str
+    webhook_id: str
 
 
 class ChannelType(object):

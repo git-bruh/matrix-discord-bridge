@@ -457,6 +457,7 @@ class DiscordClient(object):
             embeds=message.get("embeds"),
             message_id=message.get("id"),
             reference=message.get("message_reference", {}).get("message_id"),
+            webhook_id=message.get("webhook_id"),
         )
 
     def to_return(self, message: discord.Message) -> bool:
@@ -464,6 +465,9 @@ class DiscordClient(object):
             message.channel_id not in self.app.db.list_channels()
             or message.embeds
             or message.author.discriminator == "0000"
+            # Check whether a webhook message was sent by us.
+            or message.webhook_id
+            in [webhook.id for webhook in self.webhook_cache.values()]
         ):
             return True
 

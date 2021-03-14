@@ -25,7 +25,7 @@ class Message(object):
     channel_id: str
     edited: bool
     embeds: list
-    message_id: str
+    id: str
     reference: str
     webhook_id: str
 

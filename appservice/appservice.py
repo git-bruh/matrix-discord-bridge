@@ -332,31 +332,38 @@ class AppService(bottle.Bottle):
         return resp.get("room_id")
 
     def join_room(self, room_id: str, mxid: str = "") -> str:
-        params = {"user_id": mxid} if mxid else {}
-
-        self.send("POST", f"/join/{room_id}", params=params)
+        self.send(
+            "POST",
+            f"/join/{room_id}",
+            params={"user_id": mxid} if mxid else {},
+        )
 
     def send_invite(self, room_id: str, mxid: str) -> None:
         self.logger.info(f"Inviting user {mxid} to room {room_id}")
 
         self.send("POST", f"/rooms/{room_id}/invite", {"user_id": mxid})
 
-    def send_typing(self, room_id: str, mxid: str) -> None:
+    def send_typing(self, room_id: str, mxid: str = "") -> None:
         self.send(
             "PUT",
             f"/rooms/{room_id}/typing/{mxid}",
             {"typing": True, "timeout": 8000},
-            {"user_id": mxid},
+            {"user_id": mxid} if mxid else {},
         )
 
-    def send_message(self, room_id: str, content: str, mxid: str) -> str:
-        content = self.create_message_event(content)
+    def redact(self, event_id: str, room_id: str, mxid: str = "") -> None:
+        self.send(
+            "PUT",
+            f"/rooms/{room_id}/redact/{event_id}/{uuid.uuid4()}",
+            params={"user_id": mxid} if mxid else {},
+        )
 
+    def send_message(self, room_id: str, content: str, mxid: str = "") -> str:
         resp = self.send(
             "PUT",
             f"/rooms/{room_id}/send/m.room.message/{uuid.uuid4()}",
-            content,
-            params={"user_id": mxid},
+            self.create_message_event(content),
+            {"user_id": mxid} if mxid else {},
         )
 
         return resp.get("event_id")
@@ -469,16 +476,18 @@ class DiscordClient(object):
             channel_id=message.get("channel_id"),
             edited=True if message.get("edited_timestamp") else False,
             embeds=message.get("embeds"),
-            message_id=message.get("id"),
+            id=message.get("id"),
             reference=message.get("message_reference", {}).get("message_id"),
             webhook_id=message.get("webhook_id"),
         )
 
-    def matrixify(self, user_id: str, channel_id: str) -> tuple:
-        return (
-            f"@_discord_{user_id}:{self.app.server_name}",
-            f"#discord_{channel_id}:{self.app.server_name}",
-        )
+    def matrixify(self, user: str = "", channel: str = "") -> str:
+        if user:
+            result = f"@_discord_{user}:{self.app.server_name}"
+        elif channel:
+            result = f"#discord_{channel}:{self.app.server_name}"
+
+        return result
 
     def to_return(self, message: discord.Message) -> bool:
         if (
@@ -499,15 +508,15 @@ class DiscordClient(object):
         """
 
         # Multiple puppets will not be created for a single webhook.
-        # This is not a good solution but avoids the added complexity
+        # This is not an ideal solution but avoids the added complexity
         # of creating puppets per webhook name.
         if message.webhook_id:
             message.author = self.get_webhook_(message.webhook_id)
 
-        mxid, room_alias = self.matrixify(
-            message.author.id, message.channel_id
+        mxid = self.matrixify(user=message.author.id)
+        room_id = self.app.get_room_id(
+            self.matrixify(channel=message.channel_id)
         )
-        room_id = self.app.get_room_id(room_alias)
 
         if not self.app.db.query_user(mxid):
             self.logger.info(
@@ -538,11 +547,20 @@ class DiscordClient(object):
 
         mxid, room_id = self.wrap(message)
 
-        self.app.send_message(room_id, message.content, mxid)
+        message_cache[message.id] = {
+            "event_id": self.app.send_message(room_id, message.content, mxid),
+            "mxid": mxid,
+            "room_id": room_id,
+        }
 
     def handle_deletion(self, message: dict) -> None:
-        return
-        # self.app.redact(message.get("id")) # message.get("channel_id")
+        message_id = message["id"]
+
+        event = message_cache.get(message_id)
+
+        if event:
+            self.app.redact(event["event_id"], event["room_id"], event["mxid"])
+            message_cache.pop(message_id)
 
     def handle_edit(self, message: dict) -> None:
         message = self.get_message_object(message)
@@ -558,8 +576,10 @@ class DiscordClient(object):
         if typing.channel_id not in self.app.db.list_channels():
             return
 
-        mxid, room_alias = self.matrixify(typing.sender, typing.channel_id)
-        room_id = self.app.get_room_id(room_alias)
+        mxid = self.matrixify(user=typing.sender)
+        room_id = self.app.get_room_id(
+            self.matrixify(channel=typing.channel_id)
+        )
 
         if mxid not in self.app.get_members(room_id):
             return

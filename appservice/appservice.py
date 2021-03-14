@@ -214,8 +214,8 @@ class AppService(bottle.Bottle):
 
         content = {
             "type": "m.login.application_service",
-            # "@test:localhost" -> "test" (Can't register with an mxid.)
-            "username": mxid[1 : -len(self.server_name) - 1],
+            # "@test:localhost" -> "test" (Can't register with a full mxid.)
+            "username": mxid[1:].split(":")[0],
         }
 
         resp = self.send("POST", "/register", content)

@@ -337,6 +337,14 @@ class AppService(bottle.Bottle):
 
         self.send("POST", f"/rooms/{room_id}/invite", {"user_id": mxid})
 
+    def send_typing(self, room_id: str, mxid: str) -> None:
+        self.send(
+            "PUT",
+            f"/rooms/{room_id}/typing/{mxid}",
+            {"typing": True, "timeout": 8000},
+            {"user_id": mxid},
+        )
+
     def send_message(self, room_id: str, content: str, mxid: str) -> str:
         content = self.create_message_event(content)
 
@@ -373,6 +381,7 @@ class DiscordClient(object):
 
     async def gateway_handler(self, gateway_url: str) -> None:
         gateway_url += "/?v=8&encoding=json"
+
         async with websockets.connect(gateway_url) as websocket:
             async for message in websocket:
                 data = json.loads(message)
@@ -382,6 +391,7 @@ class DiscordClient(object):
 
                 if opcode == discord.GatewayOpCodes.DISPATCH:
                     otype = data.get("t")
+
                     if otype == "READY":
                         self.logger.info("READY")
 
@@ -394,8 +404,8 @@ class DiscordClient(object):
                     elif otype == "MESSAGE_UPDATE":
                         self.handle_edit(data_dict)
 
-                    else:
-                        self.logger.info(f"Unknown opcode: {otype}")
+                    elif otype == "TYPING_START":
+                        self.handle_typing(data_dict)
 
                 elif opcode == discord.GatewayOpCodes.HELLO:
                     heartbeat_interval = data_dict.get("heartbeat_interval")
@@ -414,10 +424,10 @@ class DiscordClient(object):
                     # NOP
                     pass
 
-                else:
-                    self.logger.info(
-                        f"Unknown event:\n{json.dumps(data, indent=4)}"
-                    )
+    def get_gateway_url(self) -> str:
+        resp = self.send("GET", "/gateway")
+
+        return resp.get("url")
 
     def get_channel_object(self, channel: dict) -> discord.Channel:
         return discord.Channel(
@@ -460,6 +470,12 @@ class DiscordClient(object):
             webhook_id=message.get("webhook_id"),
         )
 
+    def matrixify(self, user_id: str, channel_id: str) -> tuple:
+        return (
+            f"@_discord_{user_id}:{self.app.server_name}",
+            f"#discord_{channel_id}:{self.app.server_name}",
+        )
+
     def to_return(self, message: discord.Message) -> bool:
         if (
             message.channel_id not in self.app.db.list_channels()
@@ -479,9 +495,9 @@ class DiscordClient(object):
         a given channel ID and a Discord user.
         """
 
-        mxid = f"@_discord_{message.author.id}:{self.app.server_name}"
-        room_alias = f"#discord_{message.channel_id}:{self.app.server_name}"
-
+        mxid, room_alias = self.matrixify(
+            message.author.id, message.channel_id
+        )
         room_id = self.app.get_room_id(room_alias)  # TODO Cache ?
 
         if not self.app.db.query_user(mxid):
@@ -524,6 +540,22 @@ class DiscordClient(object):
         if self.to_return(message):
             return
 
+    def handle_typing(self, typing: dict) -> None:
+        typing = discord.Typing(
+            sender=typing.get("user_id"), channel_id=typing.get("channel_id")
+        )
+
+        if typing.channel_id not in self.app.db.list_channels():
+            return
+
+        mxid, room_alias = self.matrixify(typing.sender, typing.channel_id)
+        room_id = self.app.get_room_id(room_alias)
+
+        if mxid not in self.app.get_members(room_id):
+            return
+
+        self.app.send_typing(room_id, mxid)
+
     def send(
         self, method: str, path: str, content: dict = {}, params: dict = {}
     ) -> dict:
@@ -544,11 +576,6 @@ class DiscordClient(object):
         # TODO handle failure
 
         return json.loads(resp.data)
-
-    def get_gateway_url(self) -> str:
-        resp = self.send("GET", "/gateway")
-
-        return resp.get("url")
 
     def get_channel(self, channel_id: str) -> discord.Channel:
         """

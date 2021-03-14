@@ -18,12 +18,6 @@ class User(object):
 
 
 @dataclass
-class Webhook(object):
-    id: str
-    token: str
-
-
-@dataclass
 class Message(object):
     attachments: list
     author: User
@@ -34,6 +28,18 @@ class Message(object):
     message_id: str
     reference: str
     webhook_id: str
+
+
+@dataclass
+class Typing(object):
+    sender: str
+    channel_id: str
+
+
+@dataclass
+class Webhook(object):
+    id: str
+    token: str
 
 
 class ChannelType(object):
@@ -98,7 +104,9 @@ class Payloads(GatewayIntents, GatewayOpCodes):
             "op": self.IDENTIFY,
             "d": {
                 "token": token,
-                "intents": self.GUILDS | self.GUILD_MESSAGES,
+                "intents": self.GUILDS
+                | self.GUILD_MESSAGES
+                | self.GUILD_MESSAGE_TYPING,
                 "properties": {
                     "$os": "discord",
                     "$browser": "discord",

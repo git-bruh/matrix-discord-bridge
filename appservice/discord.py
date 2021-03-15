@@ -28,7 +28,6 @@ class Message(object):
     author: User
     content: str
     channel_id: str
-    edited: bool
     id: str
     reference: Optional[str]
     webhook_id: Optional[str]

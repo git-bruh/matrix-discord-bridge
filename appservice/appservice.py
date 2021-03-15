@@ -6,7 +6,7 @@ import sys
 import threading
 import urllib.parse
 import uuid
-from typing import List, Tuple, Union
+from typing import Dict, List, Tuple, Union
 
 import bottle
 import urllib3
@@ -51,8 +51,8 @@ def config_gen(config_file: str) -> dict:
 
 config = config_gen("appservice.json")
 
-message_cache = {}  # Used for edits and replies.
-http = urllib3.PoolManager()  # Used for sending requests.
+message_cache: dict = {}
+http = urllib3.PoolManager()
 
 
 class AppService(bottle.Bottle):
@@ -216,10 +216,19 @@ class AppService(bottle.Bottle):
 
         webhook = self.discord.get_webhook(message.channel_id, "matrix_bridge")
 
-        message_cache[message.event_id] = {
-            "message_id": self.discord.send_webhook(message, webhook),
-            "webhook": webhook,
-        }
+        if message.relates_to:
+            # The message was edited.
+            relation = message_cache.get(message.relates_to)
+
+            if relation:
+                self.discord.edit_webhook(
+                    message.new_body, relation["message_id"], webhook
+                )
+        else:
+            message_cache[message.event_id] = {
+                "message_id": self.discord.send_webhook(message, webhook),
+                "webhook": webhook,
+            }
 
     def handle_redaction(self, event: dict) -> None:
         redacts = event["redacts"]
@@ -380,18 +389,32 @@ class AppService(bottle.Bottle):
             params={"user_id": mxid} if mxid else {},
         )
 
-    def send_message(self, room_id: str, content: str, mxid: str = "") -> str:
+    def send_message(
+        self, room_id: str, content: str, mxid: str = "", edited: str = ""
+    ) -> str:
         resp = self.send(
             "PUT",
             f"/rooms/{room_id}/send/m.room.message/{uuid.uuid4()}",
-            self.create_message_event(content),
+            self.create_message_event(content, edited),
             {"user_id": mxid} if mxid else {},
         )
 
         return resp["event_id"]
 
-    def create_message_event(self, message: str) -> dict:
-        content = {"body": message, "msgtype": "m.text"}
+    def create_message_event(self, message: str, edited: str) -> dict:
+        content = {
+            "body": message,
+            "format": "org.matrix.custom.html",
+            "msgtype": "m.text"
+            # "formatted_body": self.get_fmt_body(message)",
+        }
+
+        if edited:
+            content = {
+                "body": f" * {content['body']}",
+                "m.relates_to": {"event_id": edited, "rel_type": "m.replace"},
+                "m.new_content": {**content},
+            }
 
         return content
 
@@ -405,7 +428,10 @@ class DiscordClient(object):
         self.webhook_cache: dict = {}
 
     async def start(self) -> None:
-        await self.gateway_handler(self.get_gateway_url())
+        try:
+            await self.gateway_handler(self.get_gateway_url())
+        except Exception:
+            self.logger.exception("Unknown exception")
 
     async def heartbeat_handler(self, websocket, interval_ms: int) -> None:
         while True:
@@ -500,7 +526,6 @@ class DiscordClient(object):
             author=self.get_member_object(message.get("author", {})),
             content=message["content"],
             channel_id=message["channel_id"],
-            edited=True if message.get("edited_timestamp") else False,
             id=message["id"],
             reference=message.get("message_reference", {}).get("message_id"),
             webhook_id=message.get("webhook_id"),
@@ -583,6 +608,16 @@ class DiscordClient(object):
 
         if self.to_return(message):
             return
+
+        event = message_cache.get(message.id)
+
+        if event:
+            self.app.send_message(
+                event["room_id"],
+                message.content,
+                event["mxid"],
+                event["event_id"],
+            )
 
     def handle_typing(self, typing: dict) -> None:
         typing = discord.Typing(
@@ -699,19 +734,12 @@ class DiscordClient(object):
         return resp["id"]
 
     def edit_webhook(
-        self, message: matrix.Event, webhook: discord.Webhook
+        self, content: str, message_id: str, webhook: discord.Webhook
     ) -> None:
-        message_id = message_cache.get(message.event_id)
-
-        if not message_id:
-            return
-
-        content = {"content": message.body}
-
         self.send(
             "PATCH",
             f"/webhooks/{webhook.id}/{webhook.token}/messages/{message_id}",
-            content,
+            {"content": content},
         )
 
     def delete_webhook(

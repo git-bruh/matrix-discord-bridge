@@ -496,11 +496,9 @@ class DiscordClient(object):
 
     def matrixify(self, user: str = "", channel: str = "") -> str:
         if user:
-            result = f"@_discord_{user}:{self.app.server_name}"
+            return f"@_discord_{user}:{self.app.server_name}"
         elif channel:
-            result = f"#discord_{channel}:{self.app.server_name}"
-
-        return result
+            return f"#discord_{channel}:{self.app.server_name}"
 
     def to_return(self, message: discord.Message) -> bool:
         if (

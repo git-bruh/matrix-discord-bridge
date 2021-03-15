@@ -15,13 +15,29 @@ import discord.ext.commands
 import nio
 
 
+def get_basedir():
+    try:
+        basedir = sys.argv[1]
+        if not os.path.exists(basedir):
+            print("Path does not exist!")
+            sys.exit(1)
+    except IndexError:
+        basedir = os.getcwd()
+
+    return basedir
+
+
 def config_gen(config_file):
+    basedir = get_basedir()
+
+    config_file = f"{basedir}/{config_file}"
+
     config_dict = {
         "homeserver": "https://matrix.org",
         "username": "@name:matrix.org",
         "password": "my-secret-password",
         "token": "my-secret-token",
-        "discord_prefix": "my-command-prefix",
+        "discord_cmd_prefix": "my-command-prefix",
         "bridge": {"channel_id": "room_id"},
     }
 
@@ -38,7 +54,6 @@ def config_gen(config_file):
 
 
 config = config_gen("config.json")
-
 message_store = {}
 
 
@@ -60,7 +75,7 @@ class MatrixClient(nio.AsyncClient):
         # Disable everyone and role mentions.
         allowed_mentions = discord.AllowedMentions(everyone=False, roles=False)
         # Set command prefix for Discord bot.
-        command_prefix = config["discord_prefix"]
+        command_prefix = config["discord_cmd_prefix"]
         # Intents to fetch members from guild.
         intents = discord.Intents.default()
         intents.members = True
@@ -243,7 +258,7 @@ class DiscordClient(discord.ext.commands.Bot):
         self.matrix_client = matrix_client
 
     def add_cogs(self):
-        cogs_dir = "./cogs"
+        cogs_dir = "f{get_basedir()}/cogs"
 
         if not os.path.isdir(cogs_dir):
             return

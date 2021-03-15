@@ -18,6 +18,16 @@ from db import DataBase
 
 
 def config_gen(config_file: str) -> dict:
+    try:
+        basedir = sys.argv[1]
+        if not os.path.exists(basedir):
+            print("Path does not exist!")
+            sys.exit(1)
+    except IndexError:
+        basedir = os.getcwd()
+
+    config_file = f"{basedir}/{config_file}"
+
     config_dict = {
         "as_token": "my-secret-as-token",
         "hs_token": "my-secret-hs-token",
@@ -26,7 +36,7 @@ def config_gen(config_file: str) -> dict:
         "server_name": "localhost",
         "discord_cmd_prefix": "/",
         "discord_token": "my-secret-discord-token",
-        "database": "bridge.db",
+        "database": f"{basedir}/bridge.db",
     }
 
     if not os.path.exists(config_file):
@@ -39,7 +49,7 @@ def config_gen(config_file: str) -> dict:
         return json.loads(f.read())
 
 
-config = config_gen("config.json")
+config = config_gen("appservice.json")
 
 message_cache = {}  # Used for edits and replies.
 http = urllib3.PoolManager()  # Used for sending requests.

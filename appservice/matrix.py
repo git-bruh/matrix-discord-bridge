@@ -14,7 +14,6 @@ class Event(object):
     channel_id: int
     event_id: str
     is_direct: bool
-    redacts: str
     relates_to: str
     room_id: str
     new_body: str

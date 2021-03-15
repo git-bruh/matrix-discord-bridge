@@ -6,7 +6,7 @@ import sys
 import threading
 import urllib.parse
 import uuid
-from typing import Union
+from typing import Optional, Union
 
 import bottle
 import urllib3
@@ -92,6 +92,8 @@ class AppService(bottle.Bottle):
                 self.handle_member(event)
             elif event_type == "m.room.message":
                 self.handle_message(event)
+            elif event_type == "m.room.redaction":
+                self.handle_redaction(event)
 
         return {}
 
@@ -136,7 +138,6 @@ class AppService(bottle.Bottle):
             channel_id=self.db.get_channel(room_id),
             event_id=event.get("event_id"),
             is_direct=content.get("is_direct"),
-            redacts=event.get("redacts"),
             relates_to=relates_to,
             room_id=room_id,
             new_body=new_body,
@@ -205,7 +206,19 @@ class AppService(bottle.Bottle):
 
         webhook = self.discord.get_webhook(message.channel_id, "matrix_bridge")
 
-        self.discord.send_webhook(message, webhook)
+        message_cache[message.event_id] = {
+            "message_id": self.discord.send_webhook(message, webhook),
+            "webhook": webhook,
+        }
+
+    def handle_redaction(self, event: dict) -> None:
+        redacts = event.get("redacts")
+
+        event = message_cache.get(redacts)
+
+        if event:
+            self.discord.delete_webhook(event["message_id"], event["webhook"])
+            message_cache.pop(redacts)
 
     def register(self, mxid: str) -> None:
         """
@@ -410,7 +423,7 @@ class DiscordClient(object):
                         self.handle_message(data_dict)
 
                     elif otype == "MESSAGE_DELETE":
-                        self.handle_deletion(data_dict)
+                        self.handle_redaction(data_dict)
 
                     elif otype == "MESSAGE_UPDATE":
                         self.handle_edit(data_dict)
@@ -553,7 +566,7 @@ class DiscordClient(object):
             "room_id": room_id,
         }
 
-    def handle_deletion(self, message: dict) -> None:
+    def handle_redaction(self, message: dict) -> None:
         message_id = message["id"]
 
         event = message_cache.get(message_id)
@@ -588,7 +601,7 @@ class DiscordClient(object):
 
     def send(
         self, method: str, path: str, content: dict = {}, params: dict = {}
-    ) -> dict:
+    ) -> Optional[dict]:
         endpoint = (
             f"https://discord.com/api/v8{path}?"
             f"{urllib.parse.urlencode(params)}"
@@ -602,6 +615,10 @@ class DiscordClient(object):
         content = json.dumps(content) if content else None
 
         resp = http.request(method, endpoint, body=content, headers=headers)
+
+        # NO CONTENT.
+        if resp.status == 204:
+            return
 
         # TODO handle failure
 
@@ -670,7 +687,7 @@ class DiscordClient(object):
 
     def send_webhook(
         self, message: matrix.Event, webhook: discord.Webhook
-    ) -> None:
+    ) -> str:
         content = {
             "avatar_url": message.author.avatar_url,
             "content": message.body[:2000],
@@ -686,7 +703,7 @@ class DiscordClient(object):
             {"wait": True},
         )
 
-        message_cache[message.event_id] = resp.get("id")
+        return resp.get("id")
 
     def edit_webhook(
         self, message: matrix.Event, webhook: discord.Webhook
@@ -705,16 +722,11 @@ class DiscordClient(object):
         )
 
     def delete_webhook(
-        self, message: matrix.Event, webhook: discord.Webhook
+        self, message_id: str, webhook: discord.Webhook
     ) -> None:
-        message_id = message_cache.get(message.redacts)
-
-        if not message_id:
-            return
-
         self.send(
             "DELETE",
-            f"/webhooks/{webhook.id}/{webhook.token}/messages/message_id",
+            f"/webhooks/{webhook.id}/{webhook.token}/messages/{message_id}",
         )
 
     def send_message(self, message: str, channel_id: str) -> None:

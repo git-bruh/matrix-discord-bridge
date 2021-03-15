@@ -504,9 +504,7 @@ class DiscordClient(object):
         if (
             message.channel_id not in self.app.db.list_channels()
             or message.embeds
-            # Check if the webhook message was sent by us.
-            or message.webhook_id
-            in [webhook.id for webhook in self.webhook_cache.values()]
+            or message.author.discriminator == "0000"
         ):
             return True
 
@@ -517,12 +515,6 @@ class DiscordClient(object):
         Get the corresponding room ID and the puppet's mxid for
         a given channel ID and a Discord user.
         """
-
-        # Multiple puppets will not be created for a single webhook.
-        # This is not an ideal solution but avoids the added complexity
-        # of creating puppets per webhook name.
-        if message.webhook_id:
-            message.author = self.get_webhook_(message.webhook_id)
 
         mxid = self.matrixify(user=message.author.id)
         room_id = self.app.get_room_id(
@@ -672,16 +664,6 @@ class DiscordClient(object):
         self.webhook_cache[channel_id] = webhook
 
         return webhook
-
-    def get_webhook_(self, webhook_id: str) -> discord.User:
-        resp = self.send("GET", f"/webhooks/{webhook_id}")
-
-        # Replace the ID and username of the user with the webhook's.
-        resp["user"]["id"] = resp["id"]
-        resp["user"]["username"] = resp["name"]
-        resp["user"]["discriminator"] = "0000"
-
-        return self.get_member_object(resp.get("user"))
 
     def send_webhook(
         self, message: matrix.Event, webhook: discord.Webhook

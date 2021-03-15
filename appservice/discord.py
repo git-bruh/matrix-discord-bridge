@@ -1,4 +1,9 @@
 from dataclasses import dataclass
+from typing import Optional
+
+
+def bitmask(bit: int) -> int:
+    return 1 << bit
 
 
 @dataclass
@@ -11,7 +16,7 @@ class Channel(object):
 
 @dataclass
 class User(object):
-    avatar_url: str
+    avatar_url: Optional[str]
     discriminator: str
     id: str
     username: str
@@ -24,10 +29,9 @@ class Message(object):
     content: str
     channel_id: str
     edited: bool
-    embeds: list
     id: str
-    reference: str
-    webhook_id: str
+    reference: Optional[str]
+    webhook_id: Optional[str]
 
 
 @dataclass
@@ -61,9 +65,6 @@ class InteractionResponseType(object):
 
 
 class GatewayIntents(object):
-    def bitmask(bit: int) -> int:
-        return 1 << bit
-
     GUILDS = bitmask(0)
     GUILD_MEMBERS = bitmask(1)
     GUILD_BANS = bitmask(2)

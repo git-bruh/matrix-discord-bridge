@@ -1,6 +1,7 @@
 import os
 import sqlite3
 import threading
+from typing import List
 
 
 class DataBase(object):
@@ -94,7 +95,7 @@ class DataBase(object):
         # Return an empty string if nothing is bridged.
         return "" if not room else room["channel_id"]
 
-    def list_channels(self) -> list:
+    def list_channels(self) -> List[str]:
         """
         Get a list of all the bridged channels.
         """
@@ -104,7 +105,6 @@ class DataBase(object):
 
             channels = self.cur.fetchall()
 
-        # Returns '[]' if nothing is bridged.
         return [channel["channel_id"] for channel in channels]
 
     def query_user(self, mxid: str) -> bool:

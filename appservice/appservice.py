@@ -6,7 +6,7 @@ import sys
 import threading
 import urllib.parse
 import uuid
-from typing import Optional, Union
+from typing import List, Tuple, Union
 
 import bottle
 import urllib3
@@ -131,7 +131,7 @@ class AppService(bottle.Bottle):
         return json.loads(resp.data)
 
     def get_event_object(self, event: dict) -> matrix.Event:
-        content = event.get("content")
+        content = event["content"]
 
         # Message edits.
         if content.get("m.relates_to", {}).get("rel_type") == "m.replace":
@@ -140,18 +140,18 @@ class AppService(bottle.Bottle):
         else:
             relates_to = new_body = None
 
-        room_id = event.get("room_id")
+        room_id = event["room_id"]
 
         return matrix.Event(
-            author=self.get_user_object(event.get("sender")),
+            author=self.get_user_object(event["sender"]),
             body=content.get("body"),
             channel_id=self.db.get_channel(room_id),
-            event_id=event.get("event_id"),
-            is_direct=content.get("is_direct"),
+            event_id=event["event_id"],
+            is_direct=True if event.get("is_direct") else False,
             relates_to=relates_to,
             room_id=room_id,
             new_body=new_body,
-            sender=event.get("sender"),
+            sender=event["sender"],
             state_key=event.get("state_key"),
         )
 
@@ -161,7 +161,7 @@ class AppService(bottle.Bottle):
         return matrix.User(avatar_url, display_name)
 
     def to_return(self, event: dict) -> bool:
-        if event.get("sender").startswith(("@_discord", self.user_id)):
+        if event["sender"].startswith(("@_discord", self.user_id)):
             return True
 
         return False
@@ -222,7 +222,7 @@ class AppService(bottle.Bottle):
         }
 
     def handle_redaction(self, event: dict) -> None:
-        redacts = event.get("redacts")
+        redacts = event["redacts"]
 
         event = message_cache.get(redacts)
 
@@ -277,8 +277,7 @@ class AppService(bottle.Bottle):
     def get_profile(self, mxid: str) -> tuple:
         resp = self.send("GET", f"/profile/{mxid}")
 
-        avatar_url = resp.get("avatar_url")
-        avatar_url = avatar_url[6:].split("/")
+        avatar_url = resp["avatar_url"][6:].split("/")
         try:
             avatar_url = (
                 f"{self.base_url}/_matrix/media/r0/download/"
@@ -291,7 +290,7 @@ class AppService(bottle.Bottle):
 
         return avatar_url, display_name
 
-    def get_members(self, room_id: str) -> list:
+    def get_members(self, room_id: str) -> List[str]:
         resp = self.send(
             "GET",
             f"/rooms/{room_id}/members",
@@ -345,16 +344,16 @@ class AppService(bottle.Bottle):
             endpoint="/_matrix/media/r0/upload",
         )
 
-        return resp.get("content_uri")
+        return resp["content_uri"]
 
     def get_room_id(self, alias: str) -> str:
         resp = self.send("GET", f"/directory/room/{urllib.parse.quote(alias)}")
 
         # TODO cache
 
-        return resp.get("room_id")
+        return resp["room_id"]
 
-    def join_room(self, room_id: str, mxid: str = "") -> str:
+    def join_room(self, room_id: str, mxid: str = "") -> None:
         self.send(
             "POST",
             f"/join/{room_id}",
@@ -389,7 +388,7 @@ class AppService(bottle.Bottle):
             {"user_id": mxid} if mxid else {},
         )
 
-        return resp.get("event_id")
+        return resp["event_id"]
 
     def create_message_event(self, message: str) -> dict:
         content = {"body": message, "msgtype": "m.text"}
@@ -403,7 +402,7 @@ class DiscordClient(object):
         self.logger = logging.getLogger("discord")
         self.token = config["discord_token"]
         self.Payloads = discord.Payloads(self.token)
-        self.webhook_cache = {}
+        self.webhook_cache: dict = {}
 
     async def start(self) -> None:
         await self.gateway_handler(self.get_gateway_url())
@@ -428,6 +427,10 @@ class DiscordClient(object):
 
                     if otype == "READY":
                         self.logger.info("READY")
+
+                    # TODO embeds
+                    elif data_dict.get("embeds"):
+                        pass
 
                     elif otype == "MESSAGE_CREATE":
                         self.handle_message(data_dict)
@@ -461,19 +464,19 @@ class DiscordClient(object):
     def get_gateway_url(self) -> str:
         resp = self.send("GET", "/gateway")
 
-        return resp.get("url")
+        return resp["url"]
 
     def get_channel_object(self, channel: dict) -> discord.Channel:
         return discord.Channel(
-            id=channel.get("id"),
-            name=channel.get("name"),
-            topic=channel.get("topic"),
-            type=channel.get("type"),
+            id=channel["id"],
+            name=channel["name"],
+            topic=channel["topic"],
+            type=channel["type"],
         )
 
     def get_member_object(self, author: dict) -> discord.User:
-        author_id = author.get("id")
-        avatar = author.get("avatar")
+        author_id = author["id"]
+        avatar = author["avatar"]
 
         if not avatar:
             avatar_url = None
@@ -486,34 +489,34 @@ class DiscordClient(object):
 
         return discord.User(
             avatar_url=avatar_url,
-            discriminator=author.get("discriminator"),
+            discriminator=author["discriminator"],
             id=author_id,
-            username=author.get("username"),
+            username=author["username"],
         )
 
     def get_message_object(self, message: dict) -> discord.Message:
         return discord.Message(
-            attachments=message.get("attachments"),
+            attachments=message["attachments"],
             author=self.get_member_object(message.get("author", {})),
-            content=message.get("content"),
-            channel_id=message.get("channel_id"),
+            content=message["content"],
+            channel_id=message["channel_id"],
             edited=True if message.get("edited_timestamp") else False,
-            embeds=message.get("embeds"),
-            id=message.get("id"),
+            id=message["id"],
             reference=message.get("message_reference", {}).get("message_id"),
             webhook_id=message.get("webhook_id"),
         )
 
     def matrixify(self, user: str = "", channel: str = "") -> str:
         if user:
-            return f"@_discord_{user}:{self.app.server_name}"
+            result = f"@_discord_{user}:{self.app.server_name}"
         elif channel:
-            return f"#discord_{channel}:{self.app.server_name}"
+            result = f"#discord_{channel}:{self.app.server_name}"
+
+        return result
 
     def to_return(self, message: discord.Message) -> bool:
         if (
             message.channel_id not in self.app.db.list_channels()
-            or message.embeds
             or message.author.discriminator == "0000"
         ):
             return True
@@ -583,7 +586,7 @@ class DiscordClient(object):
 
     def handle_typing(self, typing: dict) -> None:
         typing = discord.Typing(
-            sender=typing.get("user_id"), channel_id=typing.get("channel_id")
+            sender=typing["user_id"], channel_id=typing["channel_id"]
         )
 
         if typing.channel_id not in self.app.db.list_channels():
@@ -601,7 +604,7 @@ class DiscordClient(object):
 
     def send(
         self, method: str, path: str, content: dict = {}, params: dict = {}
-    ) -> Optional[dict]:
+    ) -> dict:
         endpoint = (
             f"https://discord.com/api/v8{path}?"
             f"{urllib.parse.urlencode(params)}"
@@ -618,7 +621,7 @@ class DiscordClient(object):
 
         # NO CONTENT.
         if resp.status == 204:
-            return
+            return {}
 
         # TODO handle failure
 
@@ -633,7 +636,7 @@ class DiscordClient(object):
 
         return self.get_channel_object(resp)
 
-    def create_webhook(self, channel_id: str, name: str) -> tuple:
+    def create_webhook(self, channel_id: str, name: str) -> Tuple[str, str]:
         """
         Create a webhook with the specified name in a given channel
         and get it's ID and token.
@@ -693,7 +696,7 @@ class DiscordClient(object):
             {"wait": True},
         )
 
-        return resp.get("id")
+        return resp["id"]
 
     def edit_webhook(
         self, message: matrix.Event, webhook: discord.Webhook

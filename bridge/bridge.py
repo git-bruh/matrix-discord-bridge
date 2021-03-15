@@ -569,10 +569,17 @@ class Callbacks(object):
         return message
 
 
+def log_except_hook(*exc_info):
+    text = "".join(traceback.format_exception(*exc_info))
+    logging.exception(f"Unhandled exception: {text}")
+
+
 async def main():
+    sys.excepthook = log_except_hook
+
     logging.basicConfig(
         level=logging.INFO,
-        handlers=[logging.FileHandler("bot.log"), logging.StreamHandler()],
+        handlers=[logging.FileHandler("bridge.log"), logging.StreamHandler()],
     )
 
     retry = 2

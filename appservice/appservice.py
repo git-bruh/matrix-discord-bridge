@@ -21,8 +21,9 @@ def config_gen(config_file: str) -> dict:
     try:
         basedir = sys.argv[1]
         if not os.path.exists(basedir):
-            print("Path does not exist!")
+            print(f"Path '{basedir}' does not exist!")
             sys.exit(1)
+        basedir = os.path.abspath(basedir)
     except IndexError:
         basedir = os.getcwd()
 
@@ -51,8 +52,8 @@ def config_gen(config_file: str) -> dict:
 
 config = config_gen("appservice.json")
 
-message_cache: dict = {}
 http = urllib3.PoolManager()
+message_cache: Dict[str, Union[discord.Webhook, str]] = {}
 
 
 class AppService(bottle.Bottle):
@@ -425,7 +426,7 @@ class DiscordClient(object):
         self.logger = logging.getLogger("discord")
         self.token = config["discord_token"]
         self.Payloads = discord.Payloads(self.token)
-        self.webhook_cache: dict = {}
+        self.webhook_cache: Dict[str, discord.Webhook] = {}
 
     async def start(self) -> None:
         try:

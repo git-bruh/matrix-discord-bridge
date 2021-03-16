@@ -95,18 +95,18 @@ class GatewayOpCodes(object):
     HEARTBEAT_ACK = 11
 
 
-class Payloads(GatewayIntents, GatewayOpCodes):
+class Payloads(object):
     def __init__(self, token):
         # TODO: Use updated seqnum
-        self.HEARTBEAT = {"op": self.HEARTBEAT, "d": 0}
+        self.HEARTBEAT = {"op": GatewayOpCodes.HEARTBEAT, "d": 0}
 
         self.IDENTIFY = {
-            "op": self.IDENTIFY,
+            "op": GatewayOpCodes.IDENTIFY,
             "d": {
                 "token": token,
-                "intents": self.GUILDS
-                | self.GUILD_MESSAGES
-                | self.GUILD_MESSAGE_TYPING,
+                "intents": GatewayIntents.GUILDS
+                | GatewayIntents.GUILD_MESSAGES
+                | GatewayIntents.GUILD_MESSAGE_TYPING,
                 "properties": {
                     "$os": "discord",
                     "$browser": "discord",

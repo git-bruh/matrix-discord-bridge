@@ -391,29 +391,49 @@ class AppService(bottle.Bottle):
         )
 
     def send_message(
-        self, room_id: str, content: str, mxid: str = "", edited: str = ""
+        self,
+        room_id: str,
+        content: dict,
+        mxid: str = "",
     ) -> str:
         resp = self.send(
             "PUT",
             f"/rooms/{room_id}/send/m.room.message/{uuid.uuid4()}",
-            self.create_message_event(content, edited),
+            content,
             {"user_id": mxid} if mxid else {},
         )
 
         return resp["event_id"]
 
-    def create_message_event(self, message: str, edited: str) -> dict:
+    def create_message_event(
+        self, message: str, edit: str = "", reply: str = ""
+    ) -> dict:
         content = {
             "body": message,
             "format": "org.matrix.custom.html",
-            "msgtype": "m.text"
-            # "formatted_body": self.get_fmt_body(message)",
+            "msgtype": "m.text",
+            "formatted_body": message,  # TODO formatted body
         }
 
-        if edited:
+        event = message_cache.get(reply)
+
+        if event:
+            content = {
+                **content,
+                "m.relates_to": {
+                    "m.in_reply_to": {"event_id": event["event_id"]}
+                },
+                "formatted_body": f"""<mx-reply><blockquote>\
+<a href='https://matrix.to/#/{event["room_id"]}/{event["event_id"]}'>\
+In reply to</a><a href='https://matrix.to/#/{event["mxid"]}'>\
+{event["mxid"]}</a><br>{event["body"]}</blockquote></mx-reply>\
+{content["formatted_body"]}""",
+            }
+
+        if edit:
             content = {
                 "body": f" * {content['body']}",
-                "m.relates_to": {"event_id": edited, "rel_type": "m.replace"},
+                "m.relates_to": {"event_id": edit, "rel_type": "m.replace"},
                 "m.new_content": {**content},
             }
 
@@ -589,8 +609,13 @@ class DiscordClient(object):
 
         mxid, room_id = self.wrap(message)
 
+        content = self.app.create_message_event(
+            message.content, reply=message.reference
+        )
+
         message_cache[message.id] = {
-            "event_id": self.app.send_message(room_id, message.content, mxid),
+            "body": content["body"],
+            "event_id": self.app.send_message(room_id, content, mxid),
             "mxid": mxid,
             "room_id": room_id,
         }
@@ -613,12 +638,10 @@ class DiscordClient(object):
         event = message_cache.get(message.id)
 
         if event:
-            self.app.send_message(
-                event["room_id"],
-                message.content,
-                event["mxid"],
-                event["event_id"],
+            content = self.app.create_message_event(
+                message.content, edit=event["event_id"]
             )
+            self.app.send_message(event["room_id"], content, event["mxid"])
 
     def handle_typing(self, typing: dict) -> None:
         typing = discord.Typing(

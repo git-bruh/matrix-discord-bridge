@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sys
 import threading
 import traceback
@@ -70,6 +71,7 @@ class AppService(bottle.Bottle):
         self.user_id = f"@{config['user_id']}:{self.server_name}"
         self.db = DataBase(config["database"])
         self.discord = DiscordClient(self)
+        self.emote_cache: Dict[str, str] = {}
         self.logger = logging.getLogger("appservice")
 
         # Add route for bottle.
@@ -287,7 +289,7 @@ class AppService(bottle.Bottle):
 
         self.db.add_room(resp["room_id"], channel.id)
 
-    def get_profile(self, mxid: str) -> tuple:
+    def get_profile(self, mxid: str) -> Tuple[str, str]:
         resp = self.send("GET", f"/profile/{mxid}")
 
         avatar_url = resp["avatar_url"][6:].split("/")
@@ -342,17 +344,15 @@ class AppService(bottle.Bottle):
 
     def upload(self, url: str) -> str:
         """
-        Upload a file to the homeserver.
+        Upload a file to the homeserver and get the MXC url.
         """
 
         resp = http.request("GET", url)
 
-        content_type, file = resp.headers.get("Content-Type"), resp.data
-
         resp = self.send(
             "POST",
-            content=file,
-            content_type=content_type,
+            content=resp.data,
+            content_type=resp.headers.get("Content-Type"),
             params={"filename": f"{uuid.uuid4()}"},
             endpoint="/_matrix/media/r0/upload",
         )
@@ -409,13 +409,13 @@ class AppService(bottle.Bottle):
         return resp["event_id"]
 
     def create_message_event(
-        self, message: str, edit: str = "", reply: str = ""
+        self, message: str, emotes: dict, edit: str = "", reply: str = ""
     ) -> dict:
         content = {
             "body": message,
             "format": "org.matrix.custom.html",
             "msgtype": "m.text",
-            "formatted_body": message,  # TODO formatted body
+            "formatted_body": self.get_fmt(message, emotes),
         }
 
         event = message_cache.get(reply)
@@ -441,6 +441,45 @@ In reply to</a><a href='https://matrix.to/#/{event["mxid"]}'>\
             }
 
         return content
+
+    def get_fmt(self, message: str, emotes: dict) -> str:
+        replace = [
+            # Code blocks.
+            ("```", "<pre><code>", "</code></pre>"),
+            # Spoilers.
+            ("||", "<span data-mx-spoiler>", "</span>"),
+            # Strikethrough.
+            ("~~", "<del>", "</del>"),
+        ]
+
+        for replace_ in replace:
+            for i in range(1, message.count(replace_[0]) + 1):
+                if i % 2:
+                    message = message.replace(replace_[0], replace_[1], 1)
+                else:
+                    message = message.replace(replace_[0], replace_[2], 1)
+
+        for emote in emotes:
+            emote_ = self.upload_emote(emotes[emote])
+            emote = f":{emote}:"
+            message = message.replace(
+                emote,
+                f"""<img alt=\"{emote}\" title=\"{emote}\" \
+height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
+            )
+
+        return message
+
+    def upload_emote(self, emote: str) -> str:
+        if emote in self.emote_cache:
+            return self.emote_cache[emote]
+
+        emote_url = f"https://cdn.discordapp.com/emojis/{emote}"
+        resp = self.upload(emote_url)
+
+        self.emote_cache[emote] = resp
+
+        return resp
 
 
 class DiscordClient(object):
@@ -573,7 +612,7 @@ class DiscordClient(object):
 
         return False
 
-    def wrap(self, message: discord.Message) -> tuple:
+    def wrap(self, message: discord.Message) -> Tuple[str, str]:
         """
         Get the corresponding room ID and the puppet's mxid for
         a given channel ID and a Discord user.
@@ -613,8 +652,10 @@ class DiscordClient(object):
 
         mxid, room_id = self.wrap(message)
 
+        content, emotes = self.process_message(message)
+
         content = self.app.create_message_event(
-            message.content, reply=message.reference
+            content, emotes, reply=message.reference
         )
 
         message_cache[message.id] = {
@@ -641,9 +682,11 @@ class DiscordClient(object):
 
         event = message_cache.get(message.id)
 
+        content, emotes = self.process_message(message)
+
         if event:
             content = self.app.create_message_event(
-                message.content, edit=event["event_id"]
+                content, emotes, edit=event["event_id"]
             )
             self.app.send_message(event["room_id"], content, event["mxid"])
 
@@ -782,6 +825,24 @@ class DiscordClient(object):
         self.send(
             "POST", f"/channels/{channel_id}/messages", {"content": message}
         )
+
+    def process_message(self, message: discord.Message) -> Tuple[str, str]:
+        content = message.content
+        regex = r"<a?:(\w+):(\d+)>"
+        emotes = {}
+
+        # { "emote_name": "emote_id" }
+        for emote in re.findall(regex, message.content):
+            emotes[emote[0]] = emote[1]
+
+        # Replace emote IDs with names.
+        content = re.sub(regex, r":\g<1>:", content)
+
+        # Append attachments to message.
+        for attachment in message.attachments:
+            content += f"\n{attachment['url']}"
+
+        return content, emotes
 
 
 def main() -> None:

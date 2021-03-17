@@ -15,20 +15,17 @@ import discord.ext.commands
 import nio
 
 
-def get_basedir():
+def config_gen(config_file):
+    global basedir
+
     try:
         basedir = sys.argv[1]
         if not os.path.exists(basedir):
-            print("Path does not exist!")
+            print(f"Path '{basedir}' does not exist!")
             sys.exit(1)
+        basedir = os.path.abspath(basedir)
     except IndexError:
         basedir = os.getcwd()
-
-    return basedir
-
-
-def config_gen(config_file):
-    basedir = get_basedir()
 
     config_file = f"{basedir}/{config_file}"
 
@@ -147,7 +144,7 @@ class MatrixClient(nio.AsyncClient):
         ]
 
         for replace in replace_:
-            for i in range(body.count(replace[0])):
+            for i in range(1, body.count(replace[0]) + 1):
                 i += 1
 
                 if i % 2:
@@ -258,7 +255,7 @@ class DiscordClient(discord.ext.commands.Bot):
         self.matrix_client = matrix_client
 
     def add_cogs(self):
-        cogs_dir = "f{get_basedir()}/cogs"
+        cogs_dir = "f{basedir}/cogs"
 
         if not os.path.isdir(cogs_dir):
             return
@@ -569,17 +566,17 @@ class Callbacks(object):
         return message
 
 
-def log_except_hook(*exc_info):
-    text = "".join(traceback.format_exception(*exc_info))
-    logging.exception(f"Unhandled exception: {text}")
-
-
 async def main():
-    sys.excepthook = log_except_hook
+    sys.excepthook = lambda *exc_info: logging.critical(
+        f"Unknown exception {''.join(traceback.format_exception(*exc_info))}"
+    )
 
     logging.basicConfig(
         level=logging.INFO,
-        handlers=[logging.FileHandler("bridge.log"), logging.StreamHandler()],
+        handlers=[
+            logging.FileHandler(f"{basedir}/bridge.log"),
+            logging.StreamHandler(),
+        ],
     )
 
     retry = 2

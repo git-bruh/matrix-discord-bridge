@@ -4,6 +4,7 @@ import logging
 import os
 import sys
 import threading
+import traceback
 import urllib.parse
 import uuid
 from typing import Dict, List, Tuple, Union
@@ -18,6 +19,8 @@ from db import DataBase
 
 
 def config_gen(config_file: str) -> dict:
+    global basedir
+
     try:
         basedir = sys.argv[1]
         if not os.path.exists(basedir):
@@ -76,7 +79,7 @@ class AppService(bottle.Bottle):
             method="PUT",
         )
 
-    def start(self):
+    def start(self) -> None:
         self.run(host="127.0.0.1", port=5000)
 
     def receive_event(self, transaction: str) -> dict:
@@ -449,10 +452,7 @@ class DiscordClient(object):
         self.webhook_cache: Dict[str, discord.Webhook] = {}
 
     async def start(self) -> None:
-        try:
-            await self.gateway_handler(self.get_gateway_url())
-        except Exception:
-            self.logger.exception("Unknown exception")
+        await self.gateway_handler(self.get_gateway_url())
 
     async def heartbeat_handler(self, websocket, interval_ms: int) -> None:
         while True:
@@ -479,17 +479,21 @@ class DiscordClient(object):
                     elif data_dict.get("embeds"):
                         pass
 
-                    elif otype == "MESSAGE_CREATE":
-                        self.handle_message(data_dict)
+                    else:
+                        try:
+                            if otype == "MESSAGE_CREATE":
+                                self.handle_message(data_dict)
 
-                    elif otype == "MESSAGE_DELETE":
-                        self.handle_redaction(data_dict)
+                            elif otype == "MESSAGE_DELETE":
+                                self.handle_redaction(data_dict)
 
-                    elif otype == "MESSAGE_UPDATE":
-                        self.handle_edit(data_dict)
+                            elif otype == "MESSAGE_UPDATE":
+                                self.handle_edit(data_dict)
 
-                    elif otype == "TYPING_START":
-                        self.handle_typing(data_dict)
+                            elif otype == "TYPING_START":
+                                self.handle_typing(data_dict)
+                        except Exception:
+                            self.logger.exception("Unknown exception")
 
                 elif opcode == discord.GatewayOpCodes.HELLO:
                     heartbeat_interval = data_dict.get("heartbeat_interval")
@@ -781,7 +785,18 @@ class DiscordClient(object):
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO)
+    # Log unhandled exceptions aswell.
+    sys.excepthook = lambda *exc_info: logging.critical(
+        "Unhandled exception\n" "".join(traceback.format_exception(*exc_info))
+    )
+
+    logging.basicConfig(
+        level=logging.INFO,
+        handlers=[
+            logging.FileHandler(f"{basedir}/appservice.log"),
+            logging.StreamHandler(),
+        ],
+    )
 
     app = AppService()
 

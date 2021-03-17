@@ -107,6 +107,18 @@ class DataBase(object):
 
         return [channel["channel_id"] for channel in channels]
 
+    def list_users(self) -> List[dict]:
+        """
+        Get a dictionary of all the puppeted users.
+        """
+
+        with self.lock:
+            self.cur.execute("SELECT * FROM users")
+
+            users = self.cur.fetchall()
+
+        return users
+
     def query_user(self, mxid: str) -> bool:
         """
         Check whether a puppet user has already been created for a given mxid.

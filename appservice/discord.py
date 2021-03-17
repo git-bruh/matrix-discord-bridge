@@ -8,6 +8,7 @@ def bitmask(bit: int) -> int:
 
 @dataclass
 class Channel(object):
+    guild: str
     id: str
     name: str
     topic: str

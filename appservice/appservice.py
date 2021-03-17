@@ -493,15 +493,68 @@ class DiscordClient(object):
     async def start(self) -> None:
         await self.gateway_handler(self.get_gateway_url())
 
+    async def sync_users(self) -> None:
+        """
+        Periodically compare the usernames and avatar URLs with Discord and
+        update if required.
+        """
+
+        while True:
+            guilds = set()  # Avoid duplicates.
+            users = []
+
+            for channel in self.app.db.list_channels():
+                guilds.add(self.get_channel(channel).guild)
+
+            for guild in guilds:
+                members = self.get_members(guild)
+                for member in members:
+                    users.append(member)
+
+                await asyncio.sleep(5)  # Avoid rate limit.
+
+            db_users = self.app.db.list_users()
+
+            users_ = {}
+            # Convert a list of dicts:
+            # [ { "avatar_url": ... } ]
+            # to a dict that is indexable by Discord IDs:
+            # { "discord_id": { "avatar_url": ... } }
+            for user in db_users:
+                users_[user["mxid"].split("_")[-1].split(":")[0]] = {**user}
+
+            for user in users:
+                user_ = users_.get(user.id)
+
+                if user_:
+                    mxid = user_["mxid"]
+                    username = f"{user.username}#{user.discriminator}"
+
+                    if user.avatar_url != user_["avatar_url"]:
+                        self.logger.info(
+                            f"Updating avatar for Discord user {user.id}."
+                        )
+                        self.app.set_avatar(user.avatar_url, mxid)
+
+                    if username != user_["username"]:
+                        self.logger.info(
+                            f"Updating username for Discord user {user.id}."
+                        )
+                        self.app.set_nick(username, mxid)
+
+            await asyncio.sleep(300)  # Check every 5 minutes.
+
     async def heartbeat_handler(self, websocket, interval_ms: int) -> None:
         while True:
             await asyncio.sleep(interval_ms / 1000)
             await websocket.send(json.dumps(self.Payloads.HEARTBEAT))
 
     async def gateway_handler(self, gateway_url: str) -> None:
-        gateway_url += "/?v=8&encoding=json"
+        asyncio.ensure_future(self.sync_users())
 
-        async with websockets.connect(gateway_url) as websocket:
+        async with websockets.connect(
+            f"{gateway_url}/?v=8&encoding=json"
+        ) as websocket:
             async for message in websocket:
                 data = json.loads(message)
                 data_dict = data.get("d")
@@ -558,13 +611,14 @@ class DiscordClient(object):
 
     def get_channel_object(self, channel: dict) -> discord.Channel:
         return discord.Channel(
+            guild=channel["guild_id"],
             id=channel["id"],
             name=channel["name"],
             topic=channel["topic"],
             type=channel["type"],
         )
 
-    def get_member_object(self, author: dict) -> discord.User:
+    def get_user_object(self, author: dict) -> discord.User:
         author_id = author["id"]
         avatar = author["avatar"]
 
@@ -587,7 +641,7 @@ class DiscordClient(object):
     def get_message_object(self, message: dict) -> discord.Message:
         return discord.Message(
             attachments=message["attachments"],
-            author=self.get_member_object(message.get("author", {})),
+            author=self.get_user_object(message.get("author", {})),
             content=message["content"],
             channel_id=message["channel_id"],
             id=message["id"],
@@ -625,7 +679,7 @@ class DiscordClient(object):
 
         if not self.app.db.query_user(mxid):
             self.logger.info(
-                f"Creating dummy user for Discord user {message.author.id}"
+                f"Creating dummy user for Discord user {message.author.id}."
             )
             self.app.register(mxid)
 
@@ -741,6 +795,17 @@ class DiscordClient(object):
         resp = self.send("GET", f"/channels/{channel_id}")
 
         return self.get_channel_object(resp)
+
+    def get_members(self, guild_id: str) -> List[discord.User]:
+        """
+        Get all the members for a given guild.
+        """
+
+        resp = self.send(
+            "GET", f"/guilds/{guild_id}/members", params={"limit": 1000}
+        )
+
+        return [self.get_user_object(member["user"]) for member in resp]
 
     def create_webhook(self, channel_id: str, name: str) -> Tuple[str, str]:
         """

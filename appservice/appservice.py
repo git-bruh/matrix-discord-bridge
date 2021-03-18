@@ -73,6 +73,7 @@ class AppService(bottle.Bottle):
         self.discord = DiscordClient(self)
         self.emote_cache: Dict[str, str] = {}
         self.logger = logging.getLogger("appservice")
+        self.format = "_discord_"
 
         # Add route for bottle.
         self.route(
@@ -153,7 +154,7 @@ class AppService(bottle.Bottle):
             body=content.get("body"),
             channel_id=self.db.get_channel(room_id),
             event_id=event["event_id"],
-            is_direct=True if event.get("is_direct") else False,
+            is_direct=content.get("is_direct", False),
             relates_to=relates_to,
             room_id=room_id,
             new_body=new_body,
@@ -201,6 +202,7 @@ class AppService(bottle.Bottle):
 
         # Check if the given channel is valid.
         channel = self.discord.get_channel(channel)
+
         if channel.type != discord.ChannelType.GUILD_TEXT:
             return
 
@@ -266,7 +268,7 @@ class AppService(bottle.Bottle):
         """
 
         content = {
-            "room_alias_name": f"discord_{channel.id}",
+            "room_alias_name": f"{self.format}{channel.id}",
             "name": channel.name,
             "topic": channel.topic,
             "visibility": "private",
@@ -649,13 +651,11 @@ class DiscordClient(object):
             webhook_id=message.get("webhook_id"),
         )
 
-    def matrixify(self, user: str = "", channel: str = "") -> str:
-        if user:
-            result = f"@_discord_{user}:{self.app.server_name}"
-        elif channel:
-            result = f"#discord_{channel}:{self.app.server_name}"
-
-        return result
+    def matrixify(self, id: str, user: bool = False) -> str:
+        return (
+            f"{'@' if user else '#'}{self.app.format}{id}:"
+            f"{self.app.server_name}"
+        )
 
     def to_return(self, message: discord.Message) -> bool:
         if (
@@ -672,10 +672,8 @@ class DiscordClient(object):
         a given channel ID and a Discord user.
         """
 
-        mxid = self.matrixify(user=message.author.id)
-        room_id = self.app.get_room_id(
-            self.matrixify(channel=message.channel_id)
-        )
+        mxid = self.matrixify(message.author.id, user=True)
+        room_id = self.app.get_room_id(self.matrixify(message.channel_id))
 
         if not self.app.db.query_user(mxid):
             self.logger.info(
@@ -752,10 +750,8 @@ class DiscordClient(object):
         if typing.channel_id not in self.app.db.list_channels():
             return
 
-        mxid = self.matrixify(user=typing.sender)
-        room_id = self.app.get_room_id(
-            self.matrixify(channel=typing.channel_id)
-        )
+        mxid = self.matrixify(typing.sender, user=True)
+        room_id = self.app.get_room_id(self.matrixify(typing.channel_id))
 
         if mxid not in self.app.get_members(room_id):
             return
@@ -918,6 +914,8 @@ def main() -> None:
 
     logging.basicConfig(
         level=logging.INFO,
+        format="%(asctime)s %(name)s:%(levelname)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
         handlers=[
             logging.FileHandler(f"{basedir}/appservice.log"),
             logging.StreamHandler(),

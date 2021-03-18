@@ -16,6 +16,13 @@ class Channel(object):
 
 
 @dataclass
+class Emote(object):
+    animated: bool
+    id: str
+    name: str
+
+
+@dataclass
 class User(object):
     avatar_url: Optional[str]
     discriminator: str

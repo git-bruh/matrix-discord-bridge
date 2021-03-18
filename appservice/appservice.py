@@ -73,7 +73,7 @@ class AppService(bottle.Bottle):
         self.discord = DiscordClient(self)
         self.emote_cache: Dict[str, str] = {}
         self.logger = logging.getLogger("appservice")
-        self.format = "_discord_"
+        self.format = "_discord_"  # "{@,#}_discord_1234:localhost"
 
         # Add route for bottle.
         self.route(
@@ -105,12 +105,19 @@ class AppService(bottle.Bottle):
         for event in events:
             event_type = event.get("type")
 
-            if event_type == "m.room.member":
-                self.handle_member(event)
-            elif event_type == "m.room.message":
-                self.handle_message(event)
-            elif event_type == "m.room.redaction":
-                self.handle_redaction(event)
+            try:
+                if event_type == "m.room.member":
+                    self.handle_member(event)
+                elif event_type == "m.room.message":
+                    self.handle_message(event)
+                elif event_type == "m.room.redaction":
+                    self.handle_redaction(event)
+            # Catch all exceptions so that we can log them with our logger.
+            except Exception:
+                bottle.response.status = 500
+                self.logger.exception("Unknown exception")
+
+                break
 
         return {}
 
@@ -185,7 +192,7 @@ class AppService(bottle.Bottle):
             return
 
         # Join the direct message room.
-        self.logger.info(f"Joining direct message room {event.room_id}")
+        self.logger.info(f"Joining direct message room {event.room_id}.")
         self.join_room(event.room_id)
 
     def handle_bridge(self, message: matrix.Event) -> None:
@@ -203,10 +210,13 @@ class AppService(bottle.Bottle):
         # Check if the given channel is valid.
         channel = self.discord.get_channel(channel)
 
-        if channel.type != discord.ChannelType.GUILD_TEXT:
+        if (
+            channel.type != discord.ChannelType.GUILD_TEXT
+            or channel.id in self.db.list_channels()
+        ):
             return
 
-        self.logger.info(f"Creating bridged room for channel {channel.id}")
+        self.logger.info(f"Creating bridged room for channel {channel.id}.")
 
         self.create_room(channel, message.sender)
 
@@ -222,6 +232,7 @@ class AppService(bottle.Bottle):
         if not message.channel_id:
             return
 
+        message.body = self.process_message(message.body)
         webhook = self.discord.get_webhook(message.channel_id, "matrix_bridge")
 
         if message.relates_to:
@@ -313,8 +324,6 @@ class AppService(bottle.Bottle):
             f"/rooms/{room_id}/members",
             params={"membership": "join", "not_membership": "leave"},
         )
-
-        # TODO cache ?
 
         return [
             content["sender"]
@@ -472,11 +481,25 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
 
         return message
 
+    def process_message(self, message: str) -> str:
+        emotes = re.findall(r":(\w*):", message)
+
+        added_emotes = []
+        for emote in emotes:
+            # Don't replace emote names with IDs multiple times.
+            if emote not in added_emotes:
+                added_emotes.append(emote)
+                emote_ = self.discord.emote_cache.get(emote)
+                if emote_:
+                    message = message.replace(f":{emote}:", emote_)
+
+        return message
+
     def upload_emote(self, emote: str) -> str:
         if emote in self.emote_cache:
             return self.emote_cache[emote]
 
-        emote_url = f"https://cdn.discordapp.com/emojis/{emote}"
+        emote_url = f"{self.discord.cdn_url}/emojis/{emote}"
         resp = self.upload(emote_url)
 
         self.emote_cache[emote] = resp
@@ -490,61 +513,86 @@ class DiscordClient(object):
         self.logger = logging.getLogger("discord")
         self.token = config["discord_token"]
         self.Payloads = discord.Payloads(self.token)
+        self.emote_cache: Dict[str, str] = {}
         self.webhook_cache: Dict[str, discord.Webhook] = {}
+        self.cdn_url = "https://cdn.discordapp.com"
 
     async def start(self) -> None:
         await self.gateway_handler(self.get_gateway_url())
 
-    async def sync_users(self) -> None:
+    async def sync(self) -> None:
         """
-        Periodically compare the usernames and avatar URLs with Discord and
-        update if required.
+        Periodically compare the usernames and avatar URLs with Discord
+        and update if they differ. Also synchronise emotes.
         """
 
-        while True:
-            guilds = set()  # Avoid duplicates.
-            users = []
+        sleep = 2  # Avoid rate limit.
 
-            for channel in self.app.db.list_channels():
-                guilds.add(self.get_channel(channel).guild)
+        async def sync_emotes(guilds: set):
+            # We could store the emotes once and update according
+            # to gateway events but we're too lazy for that.
+            emotes = []
 
             for guild in guilds:
-                members = self.get_members(guild)
-                for member in members:
-                    users.append(member)
+                [emotes.append(emote) for emote in (self.get_emotes(guild))]
+                await asyncio.sleep(sleep)
 
-                await asyncio.sleep(5)  # Avoid rate limit.
+            self.emote_cache.clear()  # Clears deleted/renamed emotes.
+
+            for emote in emotes:
+                self.emote_cache[
+                    f"{emote.name}"
+                ] = f"<{'a' if emote.animated else ''}:{emote.name}:{emote.id}>"
+
+        async def sync_users(guilds: set):
+            users = []
+
+            for guild in guilds:
+                [users.append(member) for member in self.get_members(guild)]
+                await asyncio.sleep(sleep)
 
             db_users = self.app.db.list_users()
 
-            users_ = {}
             # Convert a list of dicts:
             # [ { "avatar_url": ... } ]
             # to a dict that is indexable by Discord IDs:
             # { "discord_id": { "avatar_url": ... } }
+            users_ = {}
+
             for user in db_users:
                 users_[user["mxid"].split("_")[-1].split(":")[0]] = {**user}
 
             for user in users:
                 user_ = users_.get(user.id)
 
-                if user_:
-                    mxid = user_["mxid"]
-                    username = f"{user.username}#{user.discriminator}"
+                if not user_:
+                    continue
 
-                    if user.avatar_url != user_["avatar_url"]:
-                        self.logger.info(
-                            f"Updating avatar for Discord user {user.id}."
-                        )
-                        self.app.set_avatar(user.avatar_url, mxid)
+                mxid = user_["mxid"]
+                username = f"{user.username}#{user.discriminator}"
 
-                    if username != user_["username"]:
-                        self.logger.info(
-                            f"Updating username for Discord user {user.id}."
-                        )
-                        self.app.set_nick(username, mxid)
+                if user.avatar_url != user_["avatar_url"]:
+                    self.logger.info(
+                        f"Updating avatar for Discord user {user.id}."
+                    )
+                    self.app.set_avatar(user.avatar_url, mxid)
 
-            await asyncio.sleep(300)  # Check every 5 minutes.
+                if username != user_["username"]:
+                    self.logger.info(
+                        f"Updating username for Discord user {user.id}."
+                    )
+                    self.app.set_nick(username, mxid)
+
+        while True:
+            guilds = set()  # Avoid duplicates.
+
+            for channel in self.app.db.list_channels():
+                guilds.add(self.get_channel(channel).guild)
+
+            await sync_emotes(guilds)
+            await sync_users(guilds)
+
+            await asyncio.sleep(120)  # Check every 2 minutes.
 
     async def heartbeat_handler(self, websocket, interval_ms: int) -> None:
         while True:
@@ -552,7 +600,7 @@ class DiscordClient(object):
             await websocket.send(json.dumps(self.Payloads.HEARTBEAT))
 
     async def gateway_handler(self, gateway_url: str) -> None:
-        asyncio.ensure_future(self.sync_users())
+        asyncio.ensure_future(self.sync())
 
         async with websockets.connect(
             f"{gateway_url}/?v=8&encoding=json"
@@ -606,6 +654,9 @@ class DiscordClient(object):
                     # NOP
                     pass
 
+                else:
+                    self.logger.info(f"Unknown OPCODE: {opcode}")
+
     def get_gateway_url(self) -> str:
         resp = self.send("GET", "/gateway")
 
@@ -628,10 +679,7 @@ class DiscordClient(object):
             avatar_url = None
         else:
             avatar_ext = "gif" if avatar.startswith("a_") else "png"
-            avatar_url = (
-                "https://cdn.discordapp.com/avatars/"
-                f"{author_id}/{avatar}.{avatar_ext}"
-            )
+            avatar_url = f"{self.cdn_url}/{author_id}/{avatar}.{avatar_ext}"
 
         return discord.User(
             avatar_url=avatar_url,
@@ -642,7 +690,7 @@ class DiscordClient(object):
 
     def get_message_object(self, message: dict) -> discord.Message:
         return discord.Message(
-            attachments=message["attachments"],
+            attachments=message.get("attachments", []),
             author=self.get_user_object(message.get("author", {})),
             content=message["content"],
             channel_id=message["channel_id"],
@@ -791,6 +839,18 @@ class DiscordClient(object):
         resp = self.send("GET", f"/channels/{channel_id}")
 
         return self.get_channel_object(resp)
+
+    def get_emotes(self, guild_id: str) -> List[discord.Emote]:
+        """
+        Get all the emotes for a given guild.
+        """
+
+        resp = self.send("GET", f"/guilds/{guild_id}/emojis")
+
+        return [
+            discord.Emote(emote["animated"], emote["id"], emote["name"])
+            for emote in resp
+        ]
 
     def get_members(self, guild_id: str) -> List[discord.User]:
         """

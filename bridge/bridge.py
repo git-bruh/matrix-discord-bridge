@@ -255,7 +255,7 @@ class DiscordClient(discord.ext.commands.Bot):
         self.matrix_client = matrix_client
 
     def add_cogs(self):
-        cogs_dir = f"./cogs"
+        cogs_dir = "./cogs"
 
         if not os.path.isdir(cogs_dir):
             return
@@ -270,7 +270,8 @@ class DiscordClient(discord.ext.commands.Bot):
 
         if str(channel_id) not in config["bridge"].keys() or (
             message
-            and message.webhook_id in [hook.id for hook in self.webhook_cache]
+            and message.webhook_id
+            in [hook.id for hook in self.webhook_cache.values()]
         ):
             return True
 

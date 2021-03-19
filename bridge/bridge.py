@@ -69,18 +69,16 @@ class MatrixClient(nio.AsyncClient):
         self.add_callbacks()
 
     def start_discord(self):
-        # Disable everyone and role mentions.
-        allowed_mentions = discord.AllowedMentions(everyone=False, roles=False)
-        # Set command prefix for Discord bot.
-        command_prefix = config["discord_cmd_prefix"]
         # Intents to fetch members from guild.
         intents = discord.Intents.default()
         intents.members = True
 
         self.discord_client = DiscordClient(
             self,
-            allowed_mentions=allowed_mentions,
-            command_prefix=command_prefix,
+            allowed_mentions=discord.AllowedMentions(
+                everyone=False, roles=False
+            ),
+            command_prefix=config["discord_cmd_prefix"],
             intents=intents,
         )
 
@@ -145,8 +143,6 @@ class MatrixClient(nio.AsyncClient):
 
         for replace in replace_:
             for i in range(1, body.count(replace[0]) + 1):
-                i += 1
-
                 if i % 2:
                     body = body.replace(replace[0], replace[1], 1)
                 else:
@@ -180,28 +176,20 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
             reply_event = await self.room_get_event(room_id, reply_id)
             reply_event = reply_event.event
 
-            content["m.relates_to"] = {"m.in_reply_to": {"event_id": reply_id}}
-
-            content[
-                "formatted_body"
-            ] = f"""<mx-reply><blockquote>\
+            content = {
+                **content,
+                "m.relates_to": {"m.in_reply_to": {"event_id": reply_id}},
+                "formatted_body": f"""<mx-reply><blockquote>\
 <a href="https://matrix.to/#/{room_id}/{reply_id}">In reply to</a>\
 <a href="https://matrix.to/#/{reply_event.sender}">{reply_event.sender}</a>\
-<br>{reply_event.body}</blockquote></mx-reply>{content["formatted_body"]}"""
-
-        if edit_id:
-            content["body"] = f" * {content['body']}"
-
-            content["m.relates_to"] = {
-                "event_id": edit_id,
-                "rel_type": "m.replace",
+<br>{reply_event.body}</blockquote></mx-reply>{content["formatted_body"]}""",
             }
 
-            content["m.new_content"] = {
-                "body": content["body"],
-                "formatted_body": content["formatted_body"],
-                "format": content["format"],
-                "msgtype": content["msgtype"],
+        if edit_id:
+            content = {
+                "body": f" * {content['body']}",
+                "m.relates_to": {"event_id": edit_id, "rel_type": "m.replace"},
+                "m.new_content": {**content},
             }
 
         message = await self.room_send(
@@ -220,8 +208,18 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
     ):
         channel = self.discord_client.channel_store[channel_id]
 
-        # Recreate hook if it was deleted.
-        hook = await self.discord_client.hook_create(channel)
+        hook_name = "matrix_bridge"
+
+        hook = self.discord_client.webhook_cache.get(str(channel.id))
+
+        if not hook:
+            hooks = await channel.webhooks()
+            hook = discord.utils.get(hooks, name=hook_name)
+
+        if not hook:
+            hook = await channel.create_webhook(name=hook_name)
+
+        self.discord_client.webhook_cache[str(channel.id)] = hook
 
         # Username must be between 1 and 80 characters in length,
         # 'wait=True' allows us to store the sent message.
@@ -246,7 +244,7 @@ class DiscordClient(discord.ext.commands.Bot):
 
         self.channel_store = {}
 
-        self.webhook_ids = set()
+        self.webhook_cache = {}
 
         self.ready = asyncio.Event()
 
@@ -255,7 +253,7 @@ class DiscordClient(discord.ext.commands.Bot):
         self.matrix_client = matrix_client
 
     def add_cogs(self):
-        cogs_dir = "f{basedir}/cogs"
+        cogs_dir = f"{basedir}/cogs"
 
         if not os.path.isdir(cogs_dir):
             return
@@ -265,36 +263,19 @@ class DiscordClient(discord.ext.commands.Bot):
                 cog = f"cogs.{cog[:-3]}"
                 self.load_extension(cog)
 
-    async def hook_create(self, channel):
-        hook_name = "matrix_bridge"
-
-        hooks = await channel.webhooks()
-
-        # Check if webhook exists.
-        hook = discord.utils.get(hooks, name=hook_name)
-        if not hook:
-            hook = await channel.create_webhook(name=hook_name)
-
-        self.webhook_ids.add(hook.id)
-
-        return hook
-
     async def to_return(self, channel_id, message=None):
         await self.matrix_client.ready.wait()
 
-        if str(channel_id) not in config["bridge"].keys():
+        if str(channel_id) not in config["bridge"].keys() or (
+            message
+            and message.webhook_id in [hook.id for hook in self.webhook_cache]
+        ):
             return True
-
-        if message:
-            if message.webhook_id in self.webhook_ids:
-                return True
 
     async def on_ready(self):
         for channel in config["bridge"].keys():
             channel_ = self.get_channel(int(channel))
             self.channel_store[channel] = channel_
-
-            await self.hook_create(channel_)
 
         self.ready.set()
 
@@ -517,16 +498,9 @@ class Callbacks(object):
 
     async def typing_callback(self, room, event):
         if (
-            not room.typing_users
-            or room.room_id not in config["bridge"].values()
-        ):
-            return
-
-        # Return if the event is sent by our bot.
-        if (
             len(room.typing_users) == 1
             and self.matrix_client.user in room.typing_users
-        ):
+        ) or room.room_id not in config["bridge"].values():
             return
 
         # Get the corresponding Discord channel.
@@ -567,12 +541,15 @@ class Callbacks(object):
 
 
 async def main():
+    # Log unhandled exceptions aswell.
     sys.excepthook = lambda *exc_info: logging.critical(
         f"Unknown exception {''.join(traceback.format_exception(*exc_info))}"
     )
 
     logging.basicConfig(
         level=logging.INFO,
+        format="%(asctime)s %(name)s:%(levelname)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
         handlers=[
             logging.FileHandler(f"{basedir}/bridge.log"),
             logging.StreamHandler(),
@@ -596,9 +573,7 @@ async def main():
         try:
             await matrix_client.sync(full_state=True)
         except Exception:
-            matrix_client.logger.error(
-                f"Initial sync failed!\n{traceback.format_exc()}"
-            )
+            matrix_client.logger.exception("Initial sync failed!")
             return False
 
         try:

@@ -187,7 +187,9 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
 
         if edit_id:
             content = {
+                **content,
                 "body": f" * {content['body']}",
+                "formatted_body": f" * {content['formatted_body']}",
                 "m.relates_to": {"event_id": edit_id, "rel_type": "m.replace"},
                 "m.new_content": {**content},
             }
@@ -541,11 +543,6 @@ class Callbacks(object):
 
 
 async def main():
-    # Log unhandled exceptions aswell.
-    sys.excepthook = lambda *exc_info: logging.critical(
-        f"Unknown exception {''.join(traceback.format_exception(*exc_info))}"
-    )
-
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(name)s:%(levelname)s: %(message)s",

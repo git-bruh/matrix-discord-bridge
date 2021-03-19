@@ -472,14 +472,28 @@ In reply to</a><a href='https://matrix.to/#/{event["mxid"]}'>\
                 else:
                     message = message.replace(replace_[0], replace_[2], 1)
 
-        for emote in emotes:
-            emote_ = self.upload_emote(emotes[emote])
-            emote = f":{emote}:"
-            message = message.replace(
-                emote,
-                f"""<img alt=\"{emote}\" title=\"{emote}\" \
-height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
+        # Upload emotes in multiple threads so that we don't
+        # block the Discord bot for too long.
+        upload_threads = [
+            threading.Thread(
+                target=self.upload_emote, args=(emote, emotes[emote])
             )
+            for emote in emotes
+        ]
+
+        [thread.start() for thread in upload_threads]
+        [thread.join() for thread in upload_threads]
+
+        for emote in emotes:
+            emote_ = self.emote_cache.get(emote)
+
+            if emote_:
+                emote = f":{emote}:"
+                message = message.replace(
+                    emote,
+                    f"""<img alt=\"{emote}\" title=\"{emote}\" \
+height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
+                )
 
         return message
 
@@ -497,18 +511,16 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
 
         return message
 
-    def upload_emote(self, emote: str) -> str:
-        if emote in self.emote_cache:
-            return self.emote_cache[emote]
+    def upload_emote(self, emote_name: str, emote_id: str) -> None:
+        if emote_name in self.emote_cache:
+            return
 
-        emote_url = f"{self.discord.cdn_url}/emojis/{emote}"
+        emote_url = f"{self.discord.cdn_url}/emojis/{emote_id}"
 
         # TODO exception handling
         resp = self.upload(emote_url)
 
-        self.emote_cache[emote] = resp
-
-        return resp
+        self.emote_cache[emote_name] = resp
 
 
 class DiscordClient(object):
@@ -672,9 +684,11 @@ class DiscordClient(object):
                         self.token, self.seq, self.session
                     )
 
-                    payload = payload.RESUME if self.resume else payload.IDENTIFY
-
-                    await websocket.send(json.dumps(payload))
+                    await websocket.send(
+                        json.dumps(
+                            payload.RESUME if self.resume else payload.IDENTIFY
+                        )
+                    )
 
                 elif opcode == discord.GatewayOpCodes.RECONNECT:
                     self.logger.info("Received RECONNECT.")
@@ -683,7 +697,7 @@ class DiscordClient(object):
                     await websocket.close()
 
                 elif opcode == discord.GatewayOpCodes.INVALID_SESSION:
-                    self.logger.info(f"Received INVALID_SESSION.")
+                    self.logger.info("Received INVALID_SESSION.")
 
                     self.resume = False
                     await websocket.close()

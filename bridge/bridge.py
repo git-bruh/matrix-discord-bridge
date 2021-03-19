@@ -582,9 +582,8 @@ async def main():
 
             await matrix_client.sync_forever(timeout=30000, full_state=True)
         except Exception:
-            matrix_client.logger.error(
-                f"Unknown exception occured\n{traceback.format_exc()}\n"
-                f"Retrying in {retry} seconds..."
+            matrix_client.logger.exception(
+                f"Unknown exception occured, retrying in {retry} seconds..."
             )
 
             # Clear "ready" status.

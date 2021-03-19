@@ -515,18 +515,21 @@ class DiscordClient(object):
         self.Payloads = discord.Payloads(self.token)
         self.emote_cache: Dict[str, str] = {}
         self.webhook_cache: Dict[str, discord.Webhook] = {}
+        self.heartbeat_task = None
         self.cdn_url = "https://cdn.discordapp.com"
 
     async def start(self) -> None:
-        await self.gateway_handler(self.get_gateway_url())
+        asyncio.ensure_future(self.sync())
+
+        # Keep reconnecting.
+        while True:
+            await self.gateway_handler(self.get_gateway_url())
 
     async def sync(self) -> None:
         """
         Periodically compare the usernames and avatar URLs with Discord
         and update if they differ. Also synchronise emotes.
         """
-
-        sleep = 2  # Avoid rate limit.
 
         async def sync_emotes(guilds: set):
             # We could store the emotes once and update according
@@ -535,21 +538,20 @@ class DiscordClient(object):
 
             for guild in guilds:
                 [emotes.append(emote) for emote in (self.get_emotes(guild))]
-                await asyncio.sleep(sleep)
 
             self.emote_cache.clear()  # Clears deleted/renamed emotes.
 
             for emote in emotes:
-                self.emote_cache[
-                    f"{emote.name}"
-                ] = f"<{'a' if emote.animated else ''}:{emote.name}:{emote.id}>"
+                self.emote_cache[f"{emote.name}"] = (
+                    f"<{'a' if emote.animated else ''}:"
+                    f"{emote.name}:{emote.id}>"
+                )
 
         async def sync_users(guilds: set):
             users = []
 
             for guild in guilds:
                 [users.append(member) for member in self.get_members(guild)]
-                await asyncio.sleep(sleep)
 
             db_users = self.app.db.list_users()
 
@@ -600,8 +602,6 @@ class DiscordClient(object):
             await websocket.send(json.dumps(self.Payloads.HEARTBEAT))
 
     async def gateway_handler(self, gateway_url: str) -> None:
-        asyncio.ensure_future(self.sync())
-
         async with websockets.connect(
             f"{gateway_url}/?v=8&encoding=json"
         ) as websocket:
@@ -639,23 +639,37 @@ class DiscordClient(object):
 
                 elif opcode == discord.GatewayOpCodes.HELLO:
                     heartbeat_interval = data_dict.get("heartbeat_interval")
+
                     self.logger.info(
                         f"Heartbeat Interval: {heartbeat_interval}"
                     )
 
                     # Send periodic hearbeats to gateway.
-                    asyncio.ensure_future(
+                    self.heartbeat_task = asyncio.ensure_future(
                         self.heartbeat_handler(websocket, heartbeat_interval)
                     )
 
                     await websocket.send(json.dumps(self.Payloads.IDENTIFY))
+
+                elif opcode == discord.GatewayOpCodes.RECONNECT:
+                    self.logger.info("Received RECONNECT.")
+
+                    # Stop sending heartbeats until we reconnect.
+                    if self.heartbeat_task:
+                        self.heartbeat_task.cancel()
+
+                    await websocket.close()
+                    return
 
                 elif opcode == discord.GatewayOpCodes.HEARTBEAT_ACK:
                     # NOP
                     pass
 
                 else:
-                    self.logger.info(f"Unknown OPCODE: {opcode}")
+                    self.logger.info(
+                        f"Unknown OP code {opcode}:\n"
+                        f"{json.dumps(data_dict, indent=4)}"
+                    )
 
     def get_gateway_url(self) -> str:
         resp = self.send("GET", "/gateway")
@@ -679,7 +693,9 @@ class DiscordClient(object):
             avatar_url = None
         else:
             avatar_ext = "gif" if avatar.startswith("a_") else "png"
-            avatar_url = f"{self.cdn_url}/{author_id}/{avatar}.{avatar_ext}"
+            avatar_url = (
+                f"{self.cdn_url}/avatars/{author_id}/{avatar}.{avatar_ext}"
+            )
 
         return discord.User(
             avatar_url=avatar_url,

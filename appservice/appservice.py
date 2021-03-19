@@ -446,7 +446,9 @@ In reply to</a><a href='https://matrix.to/#/{event["mxid"]}'>\
 
         if edit:
             content = {
+                **content,
                 "body": f" * {content['body']}",
+                "formatted_body": f" * {content['formatted_body']}",
                 "m.relates_to": {"event_id": edit, "rel_type": "m.replace"},
                 "m.new_content": {**content},
             }
@@ -500,6 +502,8 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
             return self.emote_cache[emote]
 
         emote_url = f"{self.discord.cdn_url}/emojis/{emote}"
+
+        # TODO exception handling
         resp = self.upload(emote_url)
 
         self.emote_cache[emote] = resp
@@ -524,9 +528,9 @@ class DiscordClient(object):
         while True:
             await self.gateway_handler(self.get_gateway_url())
 
-            # TODO handle other stuff.
-            if not self.resume:
-                return
+            # Stop sending heartbeats until we reconnect.
+            if self.heartbeat_task:
+                self.heartbeat_task.cancel()
 
     async def sync(self) -> None:
         """
@@ -668,20 +672,20 @@ class DiscordClient(object):
                         self.token, self.seq, self.session
                     )
 
-                    await websocket.send(
-                        json.dumps(
-                            payload.RESUME if self.resume else payload.IDENTIFY
-                        )
-                    )
+                    payload = payload.RESUME if self.resume else payload.IDENTIFY
+
+                    await websocket.send(json.dumps(payload))
 
                 elif opcode == discord.GatewayOpCodes.RECONNECT:
                     self.logger.info("Received RECONNECT.")
 
-                    # Stop sending heartbeats until we reconnect.
-                    if self.heartbeat_task:
-                        self.heartbeat_task.cancel()
-
                     self.resume = True
+                    await websocket.close()
+
+                elif opcode == discord.GatewayOpCodes.INVALID_SESSION:
+                    self.logger.info(f"Received INVALID_SESSION.")
+
+                    self.resume = False
                     await websocket.close()
 
                 elif opcode == discord.GatewayOpCodes.HEARTBEAT_ACK:
@@ -691,7 +695,7 @@ class DiscordClient(object):
                 else:
                     self.logger.info(
                         f"Unknown OP code {opcode}:\n"
-                        f"{json.dumps(data_dict, indent=4)}"
+                        f"{json.dumps(data, indent=4)}"
                     )
 
     def get_gateway_url(self) -> str:

@@ -253,7 +253,7 @@ class DiscordClient(discord.ext.commands.Bot):
         self.matrix_client = matrix_client
 
     def add_cogs(self):
-        cogs_dir = f"{basedir}/cogs"
+        cogs_dir = f"./cogs"
 
         if not os.path.isdir(cogs_dir):
             return

@@ -104,9 +104,8 @@ class GatewayOpCodes(object):
 
 
 class Payloads(object):
-    def __init__(self, token):
-        # TODO: Use updated seqnum
-        self.HEARTBEAT = {"op": GatewayOpCodes.HEARTBEAT, "d": 0}
+    def __init__(self, token: str, seq: int, session_id: str) -> None:
+        self.HEARTBEAT = {"op": GatewayOpCodes.HEARTBEAT, "d": seq}
 
         self.IDENTIFY = {
             "op": GatewayOpCodes.IDENTIFY,
@@ -121,4 +120,9 @@ class Payloads(object):
                     "$device": "discord",
                 },
             },
+        }
+
+        self.RESUME = {
+            "op": GatewayOpCodes.RESUME,
+            "d": {"token": token, "session_id": session_id, "seq": seq},
         }

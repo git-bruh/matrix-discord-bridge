@@ -512,11 +512,10 @@ class DiscordClient(object):
         self.app = appservice
         self.logger = logging.getLogger("discord")
         self.token = config["discord_token"]
-        self.Payloads = discord.Payloads(self.token)
         self.emote_cache: Dict[str, str] = {}
         self.webhook_cache: Dict[str, discord.Webhook] = {}
-        self.heartbeat_task = None
         self.cdn_url = "https://cdn.discordapp.com"
+        self.heartbeat_task = self.resume = self.seq = self.session = None
 
     async def start(self) -> None:
         asyncio.ensure_future(self.sync())
@@ -524,6 +523,10 @@ class DiscordClient(object):
         # Keep reconnecting.
         while True:
             await self.gateway_handler(self.get_gateway_url())
+
+            # TODO handle other stuff.
+            if not self.resume:
+                return
 
     async def sync(self) -> None:
         """
@@ -599,7 +602,13 @@ class DiscordClient(object):
     async def heartbeat_handler(self, websocket, interval_ms: int) -> None:
         while True:
             await asyncio.sleep(interval_ms / 1000)
-            await websocket.send(json.dumps(self.Payloads.HEARTBEAT))
+            await websocket.send(
+                json.dumps(
+                    discord.Payloads(
+                        self.token, self.seq, self.session
+                    ).HEARTBEAT
+                )
+            )
 
     async def gateway_handler(self, gateway_url: str) -> None:
         async with websockets.connect(
@@ -611,10 +620,16 @@ class DiscordClient(object):
 
                 opcode = data.get("op")
 
+                seq = data.get("s")
+                if seq:
+                    self.seq = seq
+
                 if opcode == discord.GatewayOpCodes.DISPATCH:
                     otype = data.get("t")
 
                     if otype == "READY":
+                        self.session = data_dict["session_id"]
+
                         self.logger.info("READY")
 
                     # TODO embeds
@@ -649,7 +664,15 @@ class DiscordClient(object):
                         self.heartbeat_handler(websocket, heartbeat_interval)
                     )
 
-                    await websocket.send(json.dumps(self.Payloads.IDENTIFY))
+                    payload = discord.Payloads(
+                        self.token, self.seq, self.session
+                    )
+
+                    await websocket.send(
+                        json.dumps(
+                            payload.RESUME if self.resume else payload.IDENTIFY
+                        )
+                    )
 
                 elif opcode == discord.GatewayOpCodes.RECONNECT:
                     self.logger.info("Received RECONNECT.")
@@ -658,8 +681,8 @@ class DiscordClient(object):
                     if self.heartbeat_task:
                         self.heartbeat_task.cancel()
 
+                    self.resume = True
                     await websocket.close()
-                    return
 
                 elif opcode == discord.GatewayOpCodes.HEARTBEAT_ACK:
                     # NOP

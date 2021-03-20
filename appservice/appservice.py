@@ -60,11 +60,7 @@ message_cache: Dict[str, Union[discord.Webhook, str]] = {}
 
 
 class RequestError(Exception):
-    def __init__(self, method: str, resp: urllib3.HTTPResponse) -> None:
-        super().__init__(
-            f"Got status '{resp.status}' from '{resp.geturl()}' "
-            f"({method})\n{resp.data}"
-        )
+    pass
 
 
 class AppService(bottle.Bottle):
@@ -145,10 +141,17 @@ class AppService(bottle.Bottle):
             f"{urllib.parse.urlencode(params)}"
         )
 
-        resp = http.request(method, endpoint, body=content, headers=headers)
+        try:
+            resp = http.request(
+                method, endpoint, body=content, headers=headers
+            )
+        except urllib3.exceptions.MaxRetryError as e:
+            raise RequestError(f"Failed to connect to the homeserver: {e}") from None
 
         if resp.status < 200 or resp.status >= 300:
-            raise RequestError(method, resp)
+            raise RequestError(
+                f"Failed to '{method}' '{resp.geturl()}':\n{resp.data}"
+            )
 
         return json.loads(resp.data)
 
@@ -904,7 +907,9 @@ class DiscordClient(object):
         resp = http.request(method, endpoint, body=content, headers=headers)
 
         if resp.status < 200 or resp.status >= 300:
-            raise RequestError(method, resp)
+            raise RequestError(
+                f"Failed to '{method}' '{resp.geturl()}':\n{resp.data}"
+            )
 
         return {} if resp.status == 204 else json.loads(resp.data)
 

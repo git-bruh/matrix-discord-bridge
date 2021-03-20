@@ -5,7 +5,6 @@ import os
 import re
 import sys
 import threading
-import traceback
 import urllib.parse
 import uuid
 from typing import Dict, List, Tuple, Union
@@ -39,8 +38,8 @@ def config_gen(config_file: str) -> dict:
         "user_id": "appservice-discord",
         "homeserver": "http://127.0.0.1:8008",
         "server_name": "localhost",
-        "discord_cmd_prefix": "/",
         "discord_token": "my-secret-discord-token",
+        "port": 5000,
         "database": f"{basedir}/bridge.db",
     }
 
@@ -56,8 +55,16 @@ def config_gen(config_file: str) -> dict:
 
 config = config_gen("appservice.json")
 
-http = urllib3.PoolManager()
+http = urllib3.PoolManager(maxsize=10)
 message_cache: Dict[str, Union[discord.Webhook, str]] = {}
+
+
+class RequestError(Exception):
+    def __init__(self, method: str, resp: urllib3.HTTPResponse) -> None:
+        super().__init__(
+            f"Got status '{resp.status}' from '{resp.geturl()}' "
+            f"({method})\n{resp.data}"
+        )
 
 
 class AppService(bottle.Bottle):
@@ -67,6 +74,7 @@ class AppService(bottle.Bottle):
         self.as_token = config["as_token"]
         self.hs_token = config["hs_token"]
         self.base_url = config["homeserver"]
+        self.port = int(config["port"])
         self.server_name = config["server_name"]
         self.user_id = f"@{config['user_id']}:{self.server_name}"
         self.db = DataBase(config["database"])
@@ -83,7 +91,7 @@ class AppService(bottle.Bottle):
         )
 
     def start(self) -> None:
-        self.run(host="127.0.0.1", port=5000)
+        self.run(host="127.0.0.1", port=self.port)
 
     def receive_event(self, transaction: str) -> dict:
         """
@@ -112,10 +120,9 @@ class AppService(bottle.Bottle):
                     self.handle_message(event)
                 elif event_type == "m.room.redaction":
                     self.handle_redaction(event)
-            # Catch all exceptions so that we can log them with our logger.
             except Exception:
+                self.logger.exception("")
                 bottle.response.status = 500
-                self.logger.exception("Unknown exception")
 
                 break
 
@@ -132,7 +139,7 @@ class AppService(bottle.Bottle):
     ) -> dict:
         params["access_token"] = self.as_token
         headers = {"Content-Type": content_type}
-        content = json.dumps(content) if type(content) == dict else content
+        content = json.dumps(content) if isinstance(content, dict) else content
         endpoint = (
             f"{self.base_url}{endpoint}{path}?"
             f"{urllib.parse.urlencode(params)}"
@@ -140,7 +147,8 @@ class AppService(bottle.Bottle):
 
         resp = http.request(method, endpoint, body=content, headers=headers)
 
-        # TODO handle failure
+        if resp.status < 200 or resp.status >= 300:
+            raise RequestError(method, resp)
 
         return json.loads(resp.data)
 
@@ -232,7 +240,6 @@ class AppService(bottle.Bottle):
         if not message.channel_id:
             return
 
-        message.body = self.process_message(message.body)
         webhook = self.discord.get_webhook(message.channel_id, "matrix_bridge")
 
         if message.relates_to:
@@ -240,10 +247,12 @@ class AppService(bottle.Bottle):
             relation = message_cache.get(message.relates_to)
 
             if relation:
+                message.new_body = self.process_message(message.new_body)
                 self.discord.edit_webhook(
                     message.new_body, relation["message_id"], webhook
                 )
         else:
+            message.body = self.process_message(message.body)
             message_cache[message.event_id] = {
                 "message_id": self.discord.send_webhook(message, webhook),
                 "webhook": webhook,
@@ -457,6 +466,8 @@ In reply to</a><a href='https://matrix.to/#/{event["mxid"]}'>\
 
     def get_fmt(self, message: str, emotes: dict) -> str:
         replace = [
+            # Bold.
+            ("**", "<strong>", "</strong>"),
             # Code blocks.
             ("```", "<pre><code>", "</code></pre>"),
             # Spoilers.
@@ -481,8 +492,7 @@ In reply to</a><a href='https://matrix.to/#/{event["mxid"]}'>\
             for emote in emotes
         ]
 
-        [thread.start() for thread in upload_threads]
-        [thread.join() for thread in upload_threads]
+        [(thread.start(), thread.join()) for thread in upload_threads]
 
         for emote in emotes:
             emote_ = self.emote_cache.get(emote)
@@ -498,6 +508,11 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
         return message
 
     def process_message(self, message: str) -> str:
+        message = message[:2000]  # Discord limit.
+
+        if not message:
+            return "Empty message."
+
         emotes = re.findall(r":(\w*):", message)
 
         added_emotes = []
@@ -512,15 +527,19 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
         return message
 
     def upload_emote(self, emote_name: str, emote_id: str) -> None:
+        # There won't be a race condition here, since only a unique
+        # set of emotes are uploaded at a time.
         if emote_name in self.emote_cache:
             return
 
         emote_url = f"{self.discord.cdn_url}/emojis/{emote_id}"
 
-        # TODO exception handling
-        resp = self.upload(emote_url)
-
-        self.emote_cache[emote_name] = resp
+        # We don't want the message to be dropped entirely if an emote
+        # fails to upload for some reason.
+        try:
+            self.emote_cache[emote_name] = self.upload(emote_url)
+        except RequestError as e:
+            self.logger.warning(f"Failed to upload emote {emote_id}: {e}")
 
 
 class DiscordClient(object):
@@ -536,12 +555,16 @@ class DiscordClient(object):
     async def start(self) -> None:
         asyncio.ensure_future(self.sync())
 
-        # Keep reconnecting.
         while True:
-            await self.gateway_handler(self.get_gateway_url())
+            try:
+                await self.gateway_handler(self.get_gateway_url())
+            except websockets.ConnectionClosedError:
+                # TODO try to reconnect.
+                self.logger.critical("Connection lost, quitting.")
+                break
 
             # Stop sending heartbeats until we reconnect.
-            if self.heartbeat_task:
+            if self.heartbeat_task and not self.heartbeat_task.cancelled():
                 self.heartbeat_task.cancel()
 
     async def sync(self) -> None:
@@ -666,7 +689,7 @@ class DiscordClient(object):
                             elif otype == "TYPING_START":
                                 self.handle_typing(data_dict)
                         except Exception:
-                            self.logger.exception("Unknown exception")
+                            self.logger.exception("")
 
                 elif opcode == discord.GatewayOpCodes.HELLO:
                     heartbeat_interval = data_dict.get("heartbeat_interval")
@@ -880,13 +903,10 @@ class DiscordClient(object):
 
         resp = http.request(method, endpoint, body=content, headers=headers)
 
-        # NO CONTENT.
-        if resp.status == 204:
-            return {}
+        if resp.status < 200 or resp.status >= 300:
+            raise RequestError(method, resp)
 
-        # TODO handle failure
-
-        return json.loads(resp.data)
+        return {} if resp.status == 204 else json.loads(resp.data)
 
     def get_channel(self, channel_id: str) -> discord.Channel:
         """
@@ -967,7 +987,7 @@ class DiscordClient(object):
     ) -> str:
         content = {
             "avatar_url": message.author.avatar_url,
-            "content": message.body[:2000],
+            "content": message.body,
             "username": message.author.display_name,
             # Disable 'everyone' and 'role' mentions.
             "allowed_mentions": {"parse": ["users"]},
@@ -985,19 +1005,31 @@ class DiscordClient(object):
     def edit_webhook(
         self, content: str, message_id: str, webhook: discord.Webhook
     ) -> None:
-        self.send(
-            "PATCH",
-            f"/webhooks/{webhook.id}/{webhook.token}/messages/{message_id}",
-            {"content": content},
-        )
+        try:
+            self.send(
+                "PATCH",
+                f"/webhooks/{webhook.id}/{webhook.token}/messages/"
+                f"{message_id}",
+                {"content": content},
+            )
+        except RequestError as e:
+            self.logger.warning(
+                f"Failed to edit webhook message {message_id}: {e}"
+            )
 
     def delete_webhook(
         self, message_id: str, webhook: discord.Webhook
     ) -> None:
-        self.send(
-            "DELETE",
-            f"/webhooks/{webhook.id}/{webhook.token}/messages/{message_id}",
-        )
+        try:
+            self.send(
+                "DELETE",
+                f"/webhooks/{webhook.id}/{webhook.token}/messages/"
+                f"{message_id}",
+            )
+        except RequestError as e:
+            self.logger.warning(
+                f"Failed to delete webhook message {message_id}: {e}"
+            )
 
     def send_message(self, message: str, channel_id: str) -> None:
         self.send(
@@ -1024,14 +1056,9 @@ class DiscordClient(object):
 
 
 def main() -> None:
-    # Log unhandled exceptions aswell.
-    sys.excepthook = lambda *exc_info: logging.critical(
-        "Unhandled exception\n" "".join(traceback.format_exception(*exc_info))
-    )
-
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s %(name)s:%(levelname)s: %(message)s",
+        format="%(asctime)s %(name)s:%(levelname)s:%(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
         handlers=[
             logging.FileHandler(f"{basedir}/appservice.log"),

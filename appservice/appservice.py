@@ -146,7 +146,9 @@ class AppService(bottle.Bottle):
                 method, endpoint, body=content, headers=headers
             )
         except urllib3.exceptions.MaxRetryError as e:
-            raise RequestError(f"Failed to connect to the homeserver: {e}") from None
+            raise RequestError(
+                f"Failed to connect to the homeserver: {e}"
+            ) from None
 
         if resp.status < 200 or resp.status >= 300:
             raise RequestError(
@@ -495,7 +497,8 @@ In reply to</a><a href='https://matrix.to/#/{event["mxid"]}'>\
             for emote in emotes
         ]
 
-        [(thread.start(), thread.join()) for thread in upload_threads]
+        [thread.start() for thread in upload_threads]
+        [thread.join() for thread in upload_threads]
 
         for emote in emotes:
             emote_ = self.emote_cache.get(emote)
@@ -512,9 +515,6 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
 
     def process_message(self, message: str) -> str:
         message = message[:2000]  # Discord limit.
-
-        if not message:
-            return "Empty message."
 
         emotes = re.findall(r":(\w*):", message)
 

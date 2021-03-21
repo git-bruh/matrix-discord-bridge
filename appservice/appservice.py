@@ -11,11 +11,11 @@ from typing import Dict, List, Tuple, Union
 
 import bottle
 import urllib3
-import websockets
 
 import discord
 import matrix
 from db import DataBase
+from gateway import Gateway
 from misc import RequestError, dict_cls
 
 
@@ -542,30 +542,13 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
             self.logger.warning(f"Failed to upload emote {emote_id}: {e}")
 
 
-class DiscordClient(object):
+class DiscordClient(Gateway):
     def __init__(self, appservice: AppService) -> None:
+        super().__init__(http, config["discord_token"])
+
         self.app = appservice
-        self.logger = logging.getLogger("discord")
-        self.token = config["discord_token"]
         self.emote_cache: Dict[str, str] = {}
         self.webhook_cache: Dict[str, discord.Webhook] = {}
-        self.cdn_url = "https://cdn.discordapp.com"
-        self.heartbeat_task = self.resume = self.seq = self.session = None
-
-    async def start(self) -> None:
-        asyncio.ensure_future(self.sync())
-
-        while True:
-            try:
-                await self.gateway_handler(self.get_gateway_url())
-            except websockets.ConnectionClosedError:
-                # TODO try to reconnect.
-                self.logger.critical("Connection lost, quitting.")
-                break
-
-            # Stop sending heartbeats until we reconnect.
-            if self.heartbeat_task and not self.heartbeat_task.cancelled():
-                self.heartbeat_task.cancel()
 
     async def sync(self) -> None:
         """
@@ -638,143 +621,10 @@ class DiscordClient(object):
 
             await asyncio.sleep(120)  # Check every 2 minutes.
 
-    async def heartbeat_handler(self, websocket, interval_ms: int) -> None:
-        while True:
-            await asyncio.sleep(interval_ms / 1000)
-            await websocket.send(
-                json.dumps(
-                    discord.Payloads(
-                        self.token, self.seq, self.session
-                    ).HEARTBEAT
-                )
-            )
+    async def start(self) -> None:
+        asyncio.ensure_future(self.sync())
 
-    async def gateway_handler(self, gateway_url: str) -> None:
-        async with websockets.connect(
-            f"{gateway_url}/?v=8&encoding=json"
-        ) as websocket:
-            async for message in websocket:
-                data = json.loads(message)
-                data_dict = data.get("d")
-
-                opcode = data.get("op")
-
-                seq = data.get("s")
-                if seq:
-                    self.seq = seq
-
-                if opcode == discord.GatewayOpCodes.DISPATCH:
-                    otype = data.get("t")
-
-                    if otype == "READY":
-                        self.session = data_dict["session_id"]
-
-                        self.logger.info("READY")
-
-                    # TODO embeds
-                    elif data_dict.get("embeds"):
-                        pass
-
-                    else:
-                        try:
-                            if otype == "MESSAGE_CREATE":
-                                self.handle_message(data_dict)
-
-                            elif otype == "MESSAGE_DELETE":
-                                self.handle_redaction(data_dict)
-
-                            elif otype == "MESSAGE_UPDATE":
-                                self.handle_edit(data_dict)
-
-                            elif otype == "TYPING_START":
-                                self.handle_typing(data_dict)
-                        except Exception:
-                            self.logger.exception("")
-
-                elif opcode == discord.GatewayOpCodes.HELLO:
-                    heartbeat_interval = data_dict.get("heartbeat_interval")
-
-                    self.logger.info(
-                        f"Heartbeat Interval: {heartbeat_interval}"
-                    )
-
-                    # Send periodic hearbeats to gateway.
-                    self.heartbeat_task = asyncio.ensure_future(
-                        self.heartbeat_handler(websocket, heartbeat_interval)
-                    )
-
-                    payload = discord.Payloads(
-                        self.token, self.seq, self.session
-                    )
-
-                    await websocket.send(
-                        json.dumps(
-                            payload.RESUME if self.resume else payload.IDENTIFY
-                        )
-                    )
-
-                elif opcode == discord.GatewayOpCodes.RECONNECT:
-                    self.logger.info("Received RECONNECT.")
-
-                    self.resume = True
-                    await websocket.close()
-
-                elif opcode == discord.GatewayOpCodes.INVALID_SESSION:
-                    self.logger.info("Received INVALID_SESSION.")
-
-                    self.resume = False
-                    await websocket.close()
-
-                elif opcode == discord.GatewayOpCodes.HEARTBEAT_ACK:
-                    # NOP
-                    pass
-
-                else:
-                    self.logger.info(
-                        f"Unknown OP code {opcode}:\n"
-                        f"{json.dumps(data, indent=4)}"
-                    )
-
-    def get_gateway_url(self) -> str:
-        resp = self.send("GET", "/gateway")
-
-        return resp["url"]
-
-    def get_user_object(self, author: dict) -> discord.User:
-        author_id = author["id"]
-        avatar = author["avatar"]
-
-        if not avatar:
-            avatar_url = None
-        else:
-            avatar_ext = "gif" if avatar.startswith("a_") else "png"
-            avatar_url = (
-                f"{self.cdn_url}/avatars/{author_id}/{avatar}.{avatar_ext}"
-            )
-
-        return discord.User(
-            avatar_url=avatar_url,
-            discriminator=author["discriminator"],
-            id=author_id,
-            username=author["username"],
-        )
-
-    def get_message_object(self, message: dict) -> discord.Message:
-        return discord.Message(
-            attachments=message.get("attachments", []),
-            author=self.get_user_object(message.get("author", {})),
-            content=message["content"],
-            channel_id=message["channel_id"],
-            id=message["id"],
-            reference=message.get("message_reference", {}).get("message_id"),
-            webhook_id=message.get("webhook_id"),
-        )
-
-    def matrixify(self, id: str, user: bool = False) -> str:
-        return (
-            f"{'@' if user else '#'}{self.app.format}{id}:"
-            f"{self.app.server_name}"
-        )
+        await self.run()
 
     def to_return(self, message: discord.Message) -> bool:
         if (
@@ -784,6 +634,12 @@ class DiscordClient(object):
             return True
 
         return False
+
+    def matrixify(self, id: str, user: bool = False) -> str:
+        return (
+            f"{'@' if user else '#'}{self.app.format}{id}:"
+            f"{self.app.server_name}"
+        )
 
     def wrap(self, message: discord.Message) -> Tuple[str, str]:
         """
@@ -815,9 +671,7 @@ class DiscordClient(object):
 
         return mxid, room_id
 
-    def handle_message(self, message: dict) -> None:
-        message = self.get_message_object(message)
-
+    def on_message_create(self, message: discord.Message) -> None:
         if self.to_return(message):
             return
 
@@ -836,18 +690,14 @@ class DiscordClient(object):
             "room_id": room_id,
         }
 
-    def handle_redaction(self, message: dict) -> None:
-        message_id = message["id"]
-
-        event = message_cache.get(message_id)
+    def on_message_delete(self, message: discord.DeletedMessage) -> None:
+        event = message_cache.get(message.id)
 
         if event:
             self.app.redact(event["event_id"], event["room_id"], event["mxid"])
-            message_cache.pop(message_id)
+            message_cache.pop(message.id)
 
-    def handle_edit(self, message: dict) -> None:
-        message = self.get_message_object(message)
-
+    def on_message_update(self, message: dict) -> None:
         if self.to_return(message):
             return
 
@@ -861,9 +711,7 @@ class DiscordClient(object):
             )
             self.app.send_message(event["room_id"], content, event["mxid"])
 
-    def handle_typing(self, typing: dict) -> None:
-        typing = dict_cls(typing, discord.Typing)
-
+    def on_typing_start(self, typing: discord.Typing) -> None:
         if typing.channel_id not in self.app.db.list_channels():
             return
 
@@ -874,30 +722,6 @@ class DiscordClient(object):
             return
 
         self.app.send_typing(room_id, mxid)
-
-    def send(
-        self, method: str, path: str, content: dict = {}, params: dict = {}
-    ) -> dict:
-        endpoint = (
-            f"https://discord.com/api/v8{path}?"
-            f"{urllib.parse.urlencode(params)}"
-        )
-        headers = {
-            "Authorization": f"Bot {self.token}",
-            "Content-Type": "application/json",
-        }
-
-        # 'body' being an empty dict breaks "GET" requests.
-        content = json.dumps(content) if content else None
-
-        resp = http.request(method, endpoint, body=content, headers=headers)
-
-        if resp.status < 200 or resp.status >= 300:
-            raise RequestError(
-                f"Failed to '{method}' '{resp.geturl()}':\n{resp.data}"
-            )
-
-        return {} if resp.status == 204 else json.loads(resp.data)
 
     def get_channel(self, channel_id: str) -> discord.Channel:
         """

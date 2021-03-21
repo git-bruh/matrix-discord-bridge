@@ -2,10 +2,6 @@ from dataclasses import dataclass
 from typing import Optional
 
 
-def bitmask(bit: int) -> int:
-    return 1 << bit
-
-
 class Channel(object):
     def __init__(self, channel: dict) -> None:
         self.guild_id = channel.get("guild_id")
@@ -42,6 +38,12 @@ class Message(object):
 
 
 @dataclass
+class DeletedMessage(object):
+    channel_id: str
+    id: str
+
+
+@dataclass
 class Typing(object):
     user_id: str
     channel_id: str
@@ -72,6 +74,9 @@ class InteractionResponseType(object):
 
 
 class GatewayIntents(object):
+    def bitmask(bit: int) -> int:
+        return 1 << bit
+
     GUILDS = bitmask(0)
     GUILD_MEMBERS = bitmask(1)
     GUILD_BANS = bitmask(2)

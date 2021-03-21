@@ -48,7 +48,7 @@ class Gateway(object):
 
     def handle_otype(self, data: dict, otype: str) -> None:
         if otype == "MESSAGE_CREATE" or otype == "MESSAGE_UPDATE":
-            obj = self.get_message_object(data)
+            obj = discord.Message(data)
         elif otype == "MESSAGE_DELETE":
             obj = dict_cls(data, discord.DeletedMessage)
         elif otype == "TYPING_START":
@@ -172,35 +172,3 @@ class Gateway(object):
             )
 
         return {} if resp.status == 204 else json.loads(resp.data)
-
-    # TODO clean up this stuff somehow ?
-
-    def get_user_object(self, author: dict) -> discord.User:
-        author_id = author["id"]
-        avatar = author["avatar"]
-
-        if not avatar:
-            avatar_url = None
-        else:
-            avatar_ext = "gif" if avatar.startswith("a_") else "png"
-            avatar_url = (
-                f"{self.cdn_url}/avatars/{author_id}/{avatar}.{avatar_ext}"
-            )
-
-        return discord.User(
-            avatar_url=avatar_url,
-            discriminator=author["discriminator"],
-            id=author_id,
-            username=author["username"],
-        )
-
-    def get_message_object(self, message: dict) -> discord.Message:
-        return discord.Message(
-            attachments=message.get("attachments", []),
-            author=self.get_user_object(message.get("author", {})),
-            content=message["content"],
-            channel_id=message["channel_id"],
-            id=message["id"],
-            reference=message.get("message_reference", {}).get("message_id"),
-            webhook_id=message.get("webhook_id"),
-        )

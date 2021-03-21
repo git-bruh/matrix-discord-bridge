@@ -155,40 +155,14 @@ class AppService(bottle.Bottle):
         return json.loads(resp.data)
 
     def get_event_object(self, event: dict) -> matrix.Event:
-        content = event["content"]
-
-        # Message edits.
-        if content.get("m.relates_to", {}).get("rel_type") == "m.replace":
-            relates_to = content.get("m.relates_to").get("event_id")
-            new_body = content.get("m.new_content").get("body")
-        else:
-            relates_to = new_body = None
-
-        room_id = event["room_id"]
-
-        return matrix.Event(
-            author=self.get_user_object(event["sender"]),
-            body=content.get("body"),
-            channel_id=self.db.get_channel(room_id),
-            event_id=event["event_id"],
-            is_direct=content.get("is_direct", False),
-            relates_to=relates_to,
-            room_id=room_id,
-            new_body=new_body,
-            sender=event["sender"],
-            state_key=event.get("state_key"),
+        event["author"] = dict_cls(
+            self.get_profile(event["sender"]), matrix.User
         )
 
-    def get_user_object(self, mxid: str) -> matrix.User:
-        avatar_url, display_name = self.get_profile(mxid)
-
-        return matrix.User(avatar_url, display_name)
+        return matrix.Event(event)
 
     def to_return(self, event: dict) -> bool:
-        if event["sender"].startswith(("@_discord", self.user_id)):
-            return True
-
-        return False
+        return event["sender"].startswith(("@_discord", self.user_id))
 
     def handle_member(self, event: dict) -> None:
         event = self.get_event_object(event)
@@ -239,12 +213,14 @@ class AppService(bottle.Bottle):
         # Handle bridging commands.
         self.handle_bridge(message)
 
-        if not message.channel_id:
+        channel_id = self.db.get_channel(message.room_id)
+
+        if not channel_id:
             return
 
-        webhook = self.discord.get_webhook(message.channel_id, "matrix_bridge")
+        webhook = self.discord.get_webhook(channel_id, "matrix_bridge")
 
-        if message.relates_to:
+        if message.relates_to and message.reltype == "m.replace":
             # The message was edited.
             relation = message_cache.get(message.relates_to)
 
@@ -313,21 +289,20 @@ class AppService(bottle.Bottle):
 
         self.db.add_room(resp["room_id"], channel.id)
 
-    def get_profile(self, mxid: str) -> Tuple[str, str]:
+    def get_profile(self, mxid: str) -> dict:
+        # TODO can this endpoint really return 404 ?
         resp = self.send("GET", f"/profile/{mxid}")
 
-        avatar_url = resp["avatar_url"][6:].split("/")
-        try:
-            avatar_url = (
+        avatar_url = resp.get("avatar_url", "")[6:].split("/")
+        avatar_url = (
                 f"{self.base_url}/_matrix/media/r0/download/"
                 f"{avatar_url[0]}/{avatar_url[1]}"
-            )
-        except IndexError:
-            avatar_url = None
+            ) if len(avatar_url) > 1 else None
 
-        display_name = resp.get("displayname")
-
-        return avatar_url, display_name
+        return {
+            "avatar_url": avatar_url,
+            "displayname": resp.get("displayname"),
+        }
 
     def get_members(self, room_id: str) -> List[str]:
         resp = self.send(
@@ -532,7 +507,7 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
         if emote_name in self.emote_cache:
             return
 
-        emote_url = f"{self.discord.cdn_url}/emojis/{emote_id}"
+        emote_url = f"{discord.CDN_URL}/emojis/{emote_id}"
 
         # We don't want the message to be dropped entirely if an emote
         # fails to upload for some reason.
@@ -613,11 +588,17 @@ class DiscordClient(Gateway):
         while True:
             guilds = set()  # Avoid duplicates.
 
-            for channel in self.app.db.list_channels():
-                guilds.add(self.get_channel(channel).guild_id)
+            try:
+                for channel in self.app.db.list_channels():
+                    guilds.add(self.get_channel(channel).guild_id)
 
-            await sync_emotes(guilds)
-            await sync_users(guilds)
+                await sync_emotes(guilds)
+                await sync_users(guilds)
+            except Exception:
+                # Don't let the background task die.
+                self.logger.exception(
+                    "Unknown exception occured during background sync:"
+                )
 
             await asyncio.sleep(120)  # Check every 2 minutes.
 
@@ -627,13 +608,11 @@ class DiscordClient(Gateway):
         await self.run()
 
     def to_return(self, message: discord.Message) -> bool:
-        if (
+        return (
             message.channel_id not in self.app.db.list_channels()
+            or not message.author
             or message.author.discriminator == "0000"
-        ):
-            return True
-
-        return False
+        )
 
     def matrixify(self, id: str, user: bool = False) -> str:
         return (
@@ -730,7 +709,7 @@ class DiscordClient(Gateway):
 
         resp = self.send("GET", f"/channels/{channel_id}")
 
-        return discord.Channel(resp)
+        return dict_cls(resp, discord.Channel)
 
     def get_emotes(self, guild_id: str) -> List[discord.Emote]:
         """
@@ -750,7 +729,7 @@ class DiscordClient(Gateway):
             "GET", f"/guilds/{guild_id}/members", params={"limit": 1000}
         )
 
-        return [self.get_user_object(member["user"]) for member in resp]
+        return [discord.User(member["user"]) for member in resp]
 
     def create_webhook(self, channel_id: str, name: str) -> discord.Webhook:
         """
@@ -798,7 +777,7 @@ class DiscordClient(Gateway):
         content = {
             "avatar_url": message.author.avatar_url,
             "content": message.body,
-            "username": message.author.display_name,
+            "username": message.author.displayname,
             # Disable 'everyone' and 'role' mentions.
             "allowed_mentions": {"parse": ["users"]},
         }

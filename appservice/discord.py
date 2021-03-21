@@ -1,14 +1,15 @@
 from dataclasses import dataclass
-from typing import Optional
+
+CDN_URL = "https://cdn.discordapp.com"
 
 
+@dataclass
 class Channel(object):
-    def __init__(self, channel: dict) -> None:
-        self.guild_id = channel.get("guild_id")
-        self.id = channel["id"]
-        self.name = channel.get("name")
-        self.topic = channel.get("topic")
-        self.type = channel["type"]
+    id: str
+    type: str
+    guild_id: str = ""
+    name: str = ""
+    topic: str = ""
 
 
 @dataclass
@@ -18,23 +19,34 @@ class Emote(object):
     name: str
 
 
-@dataclass
 class User(object):
-    avatar_url: Optional[str]
-    discriminator: str
-    id: str
-    username: str
+    def __init__(self, user: dict) -> None:
+        self.discriminator = user["discriminator"]
+        self.id = user["id"]
+        self.username = user["username"]
+
+        avatar = user["avatar"]
+
+        if not avatar:
+            self.avatar_url = None
+        else:
+            ext = "gif" if avatar.startswith("a_") else "png"
+            self.avatar_url = f"{CDN_URL}/avatars/{self.id}/{avatar}.{ext}"
 
 
-@dataclass
 class Message(object):
-    attachments: list
-    author: User
-    content: str
-    channel_id: str
-    id: str
-    reference: Optional[str]
-    webhook_id: Optional[str]
+    def __init__(self, message: dict) -> None:
+        self.attachments = message.get("attachments", [])
+        self.channel_id = message["channel_id"]
+        self.content = message.get("content", "")
+        self.id = message["id"]
+        self.reference = message.get("reference", {}).get("message_id", "")
+        self.webhook_id = message.get("webhook_id", "")
+
+        author = message.get("author")
+
+        if author:
+            self.author = User(author)
 
 
 @dataclass

@@ -6,13 +6,13 @@ def bitmask(bit: int) -> int:
     return 1 << bit
 
 
-@dataclass
 class Channel(object):
-    guild: str
-    id: str
-    name: str
-    topic: str
-    type: int
+    def __init__(self, channel: dict) -> None:
+        self.guild_id = channel.get("guild_id")
+        self.id = channel["id"]
+        self.name = channel.get("name")
+        self.topic = channel.get("topic")
+        self.type = channel["type"]
 
 
 @dataclass
@@ -43,7 +43,7 @@ class Message(object):
 
 @dataclass
 class Typing(object):
-    sender: str
+    user_id: str
     channel_id: str
 
 

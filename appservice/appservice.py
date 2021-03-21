@@ -16,6 +16,7 @@ import websockets
 import discord
 import matrix
 from db import DataBase
+from misc import RequestError, dict_cls
 
 
 def config_gen(config_file: str) -> dict:
@@ -57,10 +58,6 @@ config = config_gen("appservice.json")
 
 http = urllib3.PoolManager(maxsize=10)
 message_cache: Dict[str, Union[discord.Webhook, str]] = {}
-
-
-class RequestError(Exception):
-    pass
 
 
 class AppService(bottle.Bottle):
@@ -634,7 +631,7 @@ class DiscordClient(object):
             guilds = set()  # Avoid duplicates.
 
             for channel in self.app.db.list_channels():
-                guilds.add(self.get_channel(channel).guild)
+                guilds.add(self.get_channel(channel).guild_id)
 
             await sync_emotes(guilds)
             await sync_users(guilds)
@@ -742,15 +739,6 @@ class DiscordClient(object):
         resp = self.send("GET", "/gateway")
 
         return resp["url"]
-
-    def get_channel_object(self, channel: dict) -> discord.Channel:
-        return discord.Channel(
-            guild=channel["guild_id"],
-            id=channel["id"],
-            name=channel["name"],
-            topic=channel["topic"],
-            type=channel["type"],
-        )
 
     def get_user_object(self, author: dict) -> discord.User:
         author_id = author["id"]
@@ -874,14 +862,12 @@ class DiscordClient(object):
             self.app.send_message(event["room_id"], content, event["mxid"])
 
     def handle_typing(self, typing: dict) -> None:
-        typing = discord.Typing(
-            sender=typing["user_id"], channel_id=typing["channel_id"]
-        )
+        typing = dict_cls(typing, discord.Typing)
 
         if typing.channel_id not in self.app.db.list_channels():
             return
 
-        mxid = self.matrixify(typing.sender, user=True)
+        mxid = self.matrixify(typing.user_id, user=True)
         room_id = self.app.get_room_id(self.matrixify(typing.channel_id))
 
         if mxid not in self.app.get_members(room_id):
@@ -920,7 +906,7 @@ class DiscordClient(object):
 
         resp = self.send("GET", f"/channels/{channel_id}")
 
-        return self.get_channel_object(resp)
+        return discord.Channel(resp)
 
     def get_emotes(self, guild_id: str) -> List[discord.Emote]:
         """
@@ -929,10 +915,7 @@ class DiscordClient(object):
 
         resp = self.send("GET", f"/guilds/{guild_id}/emojis")
 
-        return [
-            discord.Emote(emote["animated"], emote["id"], emote["name"])
-            for emote in resp
-        ]
+        return [dict_cls(emote, discord.Emote) for emote in resp]
 
     def get_members(self, guild_id: str) -> List[discord.User]:
         """
@@ -945,7 +928,7 @@ class DiscordClient(object):
 
         return [self.get_user_object(member["user"]) for member in resp]
 
-    def create_webhook(self, channel_id: str, name: str) -> Tuple[str, str]:
+    def create_webhook(self, channel_id: str, name: str) -> discord.Webhook:
         """
         Create a webhook with the specified name in a given channel
         and get it's ID and token.
@@ -955,7 +938,7 @@ class DiscordClient(object):
             "POST", f"/channels/{channel_id}/webhooks", {"name": name}
         )
 
-        return resp["id"], resp["token"]
+        return dict_cls(resp, discord.Webhook)
 
     def get_webhook(self, channel_id: str, name: str) -> discord.Webhook:
         """
@@ -971,7 +954,7 @@ class DiscordClient(object):
         webhooks = self.send("GET", f"/channels/{channel_id}/webhooks")
         webhook = next(
             (
-                (webhook["id"], webhook["token"])
+                dict_cls(webhook, discord.Webhook)
                 for webhook in webhooks
                 if webhook["name"] == name
             ),
@@ -980,8 +963,6 @@ class DiscordClient(object):
 
         if not webhook:
             webhook = self.create_webhook(channel_id, name)
-
-        webhook = discord.Webhook(id=webhook[0], token=webhook[1])
 
         self.webhook_cache[channel_id] = webhook
 

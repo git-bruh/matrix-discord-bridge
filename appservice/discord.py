@@ -28,7 +28,10 @@ class User(object):
         avatar = user["avatar"]
 
         if not avatar:
-            self.avatar_url = None
+            # https://discord.com/developers/docs/reference#image-formatting
+            self.avatar_url = (
+                f"{CDN_URL}/embed/avatars/{int(self.discriminator) % 5}.png"
+            )
         else:
             ext = "gif" if avatar.startswith("a_") else "png"
             self.avatar_url = f"{CDN_URL}/avatars/{self.id}/{avatar}.{ext}"

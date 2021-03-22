@@ -1,7 +1,8 @@
 import json
 import logging
 import urllib.parse
-from typing import Union
+import uuid
+from typing import List, Union
 
 import bottle
 import urllib3
@@ -70,11 +71,11 @@ class AppService(bottle.Bottle):
 
         if not hs_token:
             bottle.response.status = 401
-            return {"errcode": "DISCORD.APPSERVICE_UNAUTHORIZED"}
+            return {"errcode": "APPSERVICE_UNAUTHORIZED"}
 
         if hs_token != self.hs_token:
             bottle.response.status = 403
-            return {"errcode": "DISCORD.APPSERVICE_FORBIDDEN"}
+            return {"errcode": "APPSERVICE_FORBIDDEN"}
 
         events = bottle.request.json.get("events")
 
@@ -89,6 +90,104 @@ class AppService(bottle.Bottle):
         )
 
         return matrix.Event(event)
+
+    def join_room(self, room_id: str, mxid: str = "") -> None:
+        self.send(
+            "POST",
+            f"/join/{room_id}",
+            params={"user_id": mxid} if mxid else {},
+        )
+
+    def redact(self, event_id: str, room_id: str, mxid: str = "") -> None:
+        self.send(
+            "PUT",
+            f"/rooms/{room_id}/redact/{event_id}/{uuid.uuid4()}",
+            params={"user_id": mxid} if mxid else {},
+        )
+
+    def get_profile(self, mxid: str) -> dict:
+        # TODO handle failure, avoid querying this endpoint repeatedly.
+        resp = self.send("GET", f"/profile/{mxid}")
+
+        avatar_url = resp.get("avatar_url", "")[6:].split("/")
+        avatar_url = (
+            (
+                f"{self.base_url}/_matrix/media/r0/download/"
+                f"{avatar_url[0]}/{avatar_url[1]}"
+            )
+            if len(avatar_url) > 1
+            else None
+        )
+
+        return {
+            "avatar_url": avatar_url,
+            "displayname": resp.get("displayname"),
+        }
+
+    def get_members(self, room_id: str) -> List[str]:
+        resp = self.send(
+            "GET",
+            f"/rooms/{room_id}/members",
+            params={"membership": "join", "not_membership": "leave"},
+        )
+
+        return [
+            content["sender"]
+            for content in resp["chunk"]
+            if content["content"]["membership"] == "join"
+        ]
+
+    def get_room_id(self, alias: str) -> str:
+        resp = self.send("GET", f"/directory/room/{urllib.parse.quote(alias)}")
+
+        # TODO cache ?
+
+        return resp["room_id"]
+
+    def upload(self, url: str) -> str:
+        """
+        Upload a file to the homeserver and get the MXC url.
+        """
+
+        resp = self.http.request("GET", url)
+
+        resp = self.send(
+            "POST",
+            content=resp.data,
+            content_type=resp.headers.get("Content-Type"),
+            params={"filename": f"{uuid.uuid4()}"},
+            endpoint="/_matrix/media/r0/upload",
+        )
+
+        return resp["content_uri"]
+
+    def send_message(
+        self,
+        room_id: str,
+        content: dict,
+        mxid: str = "",
+    ) -> str:
+        resp = self.send(
+            "PUT",
+            f"/rooms/{room_id}/send/m.room.message/{uuid.uuid4()}",
+            content,
+            {"user_id": mxid} if mxid else {},
+        )
+
+        return resp["event_id"]
+
+    def send_typing(
+        self, room_id: str, mxid: str = "", timeout: int = 8000
+    ) -> None:
+        self.send(
+            "PUT",
+            f"/rooms/{room_id}/typing/{mxid}",
+            {"typing": True, "timeout": timeout},
+            {"user_id": mxid} if mxid else {},
+        )
+
+    def send_invite(self, room_id: str, mxid: str) -> None:
+        self.send("POST", f"/rooms/{room_id}/invite", {"user_id": mxid})
 
     def send(
         self,

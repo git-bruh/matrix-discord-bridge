@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import urllib.parse
+from typing import List
 
 import urllib3
 import websockets
@@ -149,6 +150,80 @@ class Gateway(object):
                         f"Unknown OP code {opcode}:\n"
                         f"{json.dumps(data, indent=4)}"
                     )
+
+    def get_channel(self, channel_id: str) -> discord.Channel:
+        """
+        Get the channel object for a given channel ID.
+        """
+
+        resp = self.send("GET", f"/channels/{channel_id}")
+
+        return dict_cls(resp, discord.Channel)
+
+    def get_emotes(self, guild_id: str) -> List[discord.Emote]:
+        """
+        Get all the emotes for a given guild.
+        """
+
+        resp = self.send("GET", f"/guilds/{guild_id}/emojis")
+
+        return [dict_cls(emote, discord.Emote) for emote in resp]
+
+    def get_members(self, guild_id: str) -> List[discord.User]:
+        """
+        Get all the members for a given guild.
+        """
+
+        resp = self.send(
+            "GET", f"/guilds/{guild_id}/members", params={"limit": 1000}
+        )
+
+        return [discord.User(member["user"]) for member in resp]
+
+    def create_webhook(self, channel_id: str, name: str) -> discord.Webhook:
+        """
+        Create a webhook with the specified name in a given channel.
+        """
+
+        resp = self.send(
+            "POST", f"/channels/{channel_id}/webhooks", {"name": name}
+        )
+
+        return dict_cls(resp, discord.Webhook)
+
+    def edit_webhook(
+        self, content: str, message_id: str, webhook: discord.Webhook
+    ) -> None:
+        try:
+            self.send(
+                "PATCH",
+                f"/webhooks/{webhook.id}/{webhook.token}/messages/"
+                f"{message_id}",
+                {"content": content},
+            )
+        except RequestError as e:
+            self.logger.warning(
+                f"Failed to edit webhook message {message_id}: {e}"
+            )
+
+    def delete_webhook(
+        self, message_id: str, webhook: discord.Webhook
+    ) -> None:
+        try:
+            self.send(
+                "DELETE",
+                f"/webhooks/{webhook.id}/{webhook.token}/messages/"
+                f"{message_id}",
+            )
+        except RequestError as e:
+            self.logger.warning(
+                f"Failed to delete webhook message {message_id}: {e}"
+            )
+
+    def send_message(self, message: str, channel_id: str) -> None:
+        self.send(
+            "POST", f"/channels/{channel_id}/messages", {"content": message}
+        )
 
     def send(
         self, method: str, path: str, content: dict = {}, params: dict = {}

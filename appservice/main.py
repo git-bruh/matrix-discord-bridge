@@ -5,9 +5,7 @@ import os
 import re
 import sys
 import threading
-import urllib.parse
-import uuid
-from typing import Dict, List, Tuple, Union
+from typing import Dict, Tuple, Union
 
 import urllib3
 
@@ -111,21 +109,6 @@ class MatrixClient(AppService):
             self.discord.delete_webhook(event["message_id"], event["webhook"])
             message_cache.pop(redacts)
 
-    def register(self, mxid: str) -> None:
-        """
-        Register a dummy user on the homeserver.
-        """
-
-        content = {
-            "type": "m.login.application_service",
-            # "@test:localhost" -> "test" (Can't register with a full mxid.)
-            "username": mxid[1:].split(":")[0],
-        }
-
-        resp = self.send("POST", "/register", content)
-
-        self.db.add_user(resp["user_id"])
-
     def create_room(self, channel: discord.Channel, sender: str) -> None:
         """
         Create a bridged room and invite the person who invoked the command.
@@ -154,126 +137,6 @@ class MatrixClient(AppService):
         resp = self.send("POST", "/createRoom", content)
 
         self.db.add_room(resp["room_id"], channel.id)
-
-    def get_profile(self, mxid: str) -> dict:
-        # TODO can this endpoint really return 404 ?
-        resp = self.send("GET", f"/profile/{mxid}")
-
-        avatar_url = resp.get("avatar_url", "")[6:].split("/")
-        avatar_url = (
-            (
-                f"{self.base_url}/_matrix/media/r0/download/"
-                f"{avatar_url[0]}/{avatar_url[1]}"
-            )
-            if len(avatar_url) > 1
-            else None
-        )
-
-        return {
-            "avatar_url": avatar_url,
-            "displayname": resp.get("displayname"),
-        }
-
-    def get_members(self, room_id: str) -> List[str]:
-        resp = self.send(
-            "GET",
-            f"/rooms/{room_id}/members",
-            params={"membership": "join", "not_membership": "leave"},
-        )
-
-        return [
-            content["sender"]
-            for content in resp["chunk"]
-            if content["content"]["membership"] == "join"
-        ]
-
-    def set_nick(self, username: str, mxid: str) -> None:
-        self.send(
-            "PUT",
-            f"/profile/{mxid}/displayname",
-            {"displayname": username},
-            params={"user_id": mxid},
-        )
-
-        self.db.add_username(username, mxid)
-
-    def set_avatar(self, avatar_url: str, mxid: str) -> None:
-        avatar_uri = self.upload(avatar_url)
-
-        self.send(
-            "PUT",
-            f"/profile/{mxid}/avatar_url",
-            {"avatar_url": avatar_uri},
-            params={"user_id": mxid},
-        )
-
-        self.db.add_avatar(avatar_url, mxid)
-
-    def upload(self, url: str) -> str:
-        """
-        Upload a file to the homeserver and get the MXC url.
-        """
-
-        resp = self.http.request("GET", url)
-
-        resp = self.send(
-            "POST",
-            content=resp.data,
-            content_type=resp.headers.get("Content-Type"),
-            params={"filename": f"{uuid.uuid4()}"},
-            endpoint="/_matrix/media/r0/upload",
-        )
-
-        return resp["content_uri"]
-
-    def get_room_id(self, alias: str) -> str:
-        resp = self.send("GET", f"/directory/room/{urllib.parse.quote(alias)}")
-
-        # TODO cache
-
-        return resp["room_id"]
-
-    def join_room(self, room_id: str, mxid: str = "") -> None:
-        self.send(
-            "POST",
-            f"/join/{room_id}",
-            params={"user_id": mxid} if mxid else {},
-        )
-
-    def send_invite(self, room_id: str, mxid: str) -> None:
-        self.logger.info(f"Inviting user {mxid} to room {room_id}")
-
-        self.send("POST", f"/rooms/{room_id}/invite", {"user_id": mxid})
-
-    def send_typing(self, room_id: str, mxid: str = "") -> None:
-        self.send(
-            "PUT",
-            f"/rooms/{room_id}/typing/{mxid}",
-            {"typing": True, "timeout": 8000},
-            {"user_id": mxid} if mxid else {},
-        )
-
-    def redact(self, event_id: str, room_id: str, mxid: str = "") -> None:
-        self.send(
-            "PUT",
-            f"/rooms/{room_id}/redact/{event_id}/{uuid.uuid4()}",
-            params={"user_id": mxid} if mxid else {},
-        )
-
-    def send_message(
-        self,
-        room_id: str,
-        content: dict,
-        mxid: str = "",
-    ) -> str:
-        resp = self.send(
-            "PUT",
-            f"/rooms/{room_id}/send/m.room.message/{uuid.uuid4()}",
-            content,
-            {"user_id": mxid} if mxid else {},
-        )
-
-        return resp["event_id"]
 
     def create_message_event(
         self, message: str, emotes: dict, edit: str = "", reply: str = ""
@@ -386,6 +249,43 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
         except RequestError as e:
             self.logger.warning(f"Failed to upload emote {emote_id}: {e}")
 
+    def register(self, mxid: str) -> None:
+        """
+        Register a dummy user on the homeserver.
+        """
+
+        content = {
+            "type": "m.login.application_service",
+            # "@test:localhost" -> "test" (Can't register with a full mxid.)
+            "username": mxid[1:].split(":")[0],
+        }
+
+        resp = self.send("POST", "/register", content)
+
+        self.db.add_user(resp["user_id"])
+
+    def set_avatar(self, avatar_url: str, mxid: str) -> None:
+        avatar_uri = self.upload(avatar_url)
+
+        self.send(
+            "PUT",
+            f"/profile/{mxid}/avatar_url",
+            {"avatar_url": avatar_uri},
+            params={"user_id": mxid},
+        )
+
+        self.db.add_avatar(avatar_url, mxid)
+
+    def set_nick(self, username: str, mxid: str) -> None:
+        self.send(
+            "PUT",
+            f"/profile/{mxid}/displayname",
+            {"displayname": username},
+            params={"user_id": mxid},
+        )
+
+        self.db.add_username(username, mxid)
+
 
 class DiscordClient(Gateway):
     def __init__(
@@ -494,8 +394,8 @@ class DiscordClient(Gateway):
 
     def wrap(self, message: discord.Message) -> Tuple[str, str]:
         """
-        Get the corresponding room ID and the puppet's mxid for
-        a given channel ID and a Discord user.
+        Get the room ID and the puppet's mxid for a given channel ID and a
+        Discord user.
         """
 
         mxid = self.matrixify(message.author.id, user=True)
@@ -517,6 +417,8 @@ class DiscordClient(Gateway):
                 self.app.set_avatar(message.author.avatar_url, mxid)
 
         if mxid not in self.app.get_members(room_id):
+            self.logger.info(f"Inviting user {mxid} to room {room_id}.")
+
             self.app.send_invite(room_id, mxid)
             self.app.join_room(room_id, mxid)
 
@@ -574,47 +476,6 @@ class DiscordClient(Gateway):
 
         self.app.send_typing(room_id, mxid)
 
-    def get_channel(self, channel_id: str) -> discord.Channel:
-        """
-        Get the corresponding `discord.Channel` object for a given channel ID.
-        """
-
-        resp = self.send("GET", f"/channels/{channel_id}")
-
-        return dict_cls(resp, discord.Channel)
-
-    def get_emotes(self, guild_id: str) -> List[discord.Emote]:
-        """
-        Get all the emotes for a given guild.
-        """
-
-        resp = self.send("GET", f"/guilds/{guild_id}/emojis")
-
-        return [dict_cls(emote, discord.Emote) for emote in resp]
-
-    def get_members(self, guild_id: str) -> List[discord.User]:
-        """
-        Get all the members for a given guild.
-        """
-
-        resp = self.send(
-            "GET", f"/guilds/{guild_id}/members", params={"limit": 1000}
-        )
-
-        return [discord.User(member["user"]) for member in resp]
-
-    def create_webhook(self, channel_id: str, name: str) -> discord.Webhook:
-        """
-        Create a webhook with the specified name in a given channel
-        and get it's ID and token.
-        """
-
-        resp = self.send(
-            "POST", f"/channels/{channel_id}/webhooks", {"name": name}
-        )
-
-        return dict_cls(resp, discord.Webhook)
-
     def get_webhook(self, channel_id: str, name: str) -> discord.Webhook:
         """
         Get the webhook object for the first webhook that matches the specified
@@ -662,40 +523,6 @@ class DiscordClient(Gateway):
         )
 
         return resp["id"]
-
-    def edit_webhook(
-        self, content: str, message_id: str, webhook: discord.Webhook
-    ) -> None:
-        try:
-            self.send(
-                "PATCH",
-                f"/webhooks/{webhook.id}/{webhook.token}/messages/"
-                f"{message_id}",
-                {"content": content},
-            )
-        except RequestError as e:
-            self.logger.warning(
-                f"Failed to edit webhook message {message_id}: {e}"
-            )
-
-    def delete_webhook(
-        self, message_id: str, webhook: discord.Webhook
-    ) -> None:
-        try:
-            self.send(
-                "DELETE",
-                f"/webhooks/{webhook.id}/{webhook.token}/messages/"
-                f"{message_id}",
-            )
-        except RequestError as e:
-            self.logger.warning(
-                f"Failed to delete webhook message {message_id}: {e}"
-            )
-
-    def send_message(self, message: str, channel_id: str) -> None:
-        self.send(
-            "POST", f"/channels/{channel_id}/messages", {"content": message}
-        )
 
     def process_message(self, message: discord.Message) -> Tuple[str, str]:
         content = message.content

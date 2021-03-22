@@ -3,27 +3,30 @@ import json
 import logging
 import urllib.parse
 
+import urllib3
 import websockets
 
 import discord
-from misc import RequestError, dict_cls
+from errors import RequestError
+from misc import dict_cls, log_except
 
 
 class Gateway(object):
-    def __init__(self, http, token):
+    def __init__(self, http: urllib3.PoolManager, token: str):
         self.http = http
         self.token = token
         self.logger = logging.getLogger("discord")
         self.cdn_url = "https://cdn.discordapp.com"
         self.heartbeat_task = self.resume = self.seq = self.session = None
 
+    @log_except
     async def run(self) -> None:
         while True:
             try:
                 await self.gateway_handler(self.get_gateway_url())
-            except websockets.ConnectionClosedError:
+            except websockets.ConnectionClosedError as e:
                 # TODO reconnect ?
-                self.logger.critical("Connection lost, quitting.")
+                self.logger.critical(f"Quitting, connection lost: {e}")
                 break
 
             # Stop sending heartbeats until we reconnect.
@@ -47,6 +50,9 @@ class Gateway(object):
             )
 
     def handle_otype(self, data: dict, otype: str) -> None:
+        if data.get("embeds"):
+            return  # TODO embeds
+
         if otype == "MESSAGE_CREATE" or otype == "MESSAGE_UPDATE":
             obj = discord.Message(data)
         elif otype == "MESSAGE_DELETE":
@@ -60,10 +66,11 @@ class Gateway(object):
         func = f"on_{otype.lower()}"  # Eg. `on_message_create`
 
         try:
+            # TODO better method
             getattr(self, func)(obj)
         except AttributeError:
             self.logger.warning(
-                f"Function {func} not defined, ignoring message."
+                f"Function '{func}' not defined, ignoring message."
             )
         except Exception:
             self.logger.exception(f"Ignoring exception in {func}:")
@@ -89,10 +96,6 @@ class Gateway(object):
                         self.session = data_dict["session_id"]
 
                         self.logger.info("READY")
-
-                    # TODO embeds
-                    elif data_dict.get("embeds"):
-                        pass
 
                     else:
                         # TODO remove temporary try except for testing.
@@ -162,9 +165,12 @@ class Gateway(object):
         # 'body' being an empty dict breaks "GET" requests.
         content = json.dumps(content) if content else None
 
-        resp = self.http.request(
-            method, endpoint, body=content, headers=headers
-        )
+        try:
+            resp = self.http.request(
+                method, endpoint, body=content, headers=headers
+            )
+        except urllib3.exceptions.HTTPError as e:
+            raise RequestError(f"Failed to connect to Discord: {e}") from None
 
         if resp.status < 200 or resp.status >= 300:
             raise RequestError(

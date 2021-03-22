@@ -45,8 +45,7 @@ class Message(object):
 
         author = message.get("author")
 
-        if author:
-            self.author = User(author)
+        self.author = User(author) if author else None
 
 
 @dataclass

@@ -4,7 +4,6 @@ import logging
 import os
 import re
 import sys
-import traceback
 import uuid
 
 import aiofiles
@@ -268,12 +267,11 @@ class DiscordClient(discord.ext.commands.Bot):
     async def to_return(self, channel_id, message=None):
         await self.matrix_client.ready.wait()
 
-        if str(channel_id) not in config["bridge"].keys() or (
+        return str(channel_id) not in config["bridge"].keys() or (
             message
             and message.webhook_id
             in [hook.id for hook in self.webhook_cache.values()]
-        ):
-            return True
+        )
 
     async def on_ready(self):
         for channel in config["bridge"].keys():
@@ -386,12 +384,11 @@ class Callbacks(object):
     async def to_return(self, room, event):
         await self.matrix_client.discord_client.ready.wait()
 
-        if (
+        return (
             room.room_id not in config["bridge"].values()
             or event.sender == self.matrix_client.user
             or not self.matrix_client.listen
-        ):
-            return True
+        )
 
     async def message_callback(self, room, event):
         message = event.body
@@ -501,9 +498,13 @@ class Callbacks(object):
 
     async def typing_callback(self, room, event):
         if (
-            len(room.typing_users) == 1
-            and self.matrix_client.user in room.typing_users
-        ) or room.room_id not in config["bridge"].values():
+            not room.typing_users
+            or (
+                len(room.typing_users) == 1
+                and self.matrix_client.user in room.typing_users
+            )
+            or room.room_id not in config["bridge"].values()
+        ):
             return
 
         # Get the corresponding Discord channel.

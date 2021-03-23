@@ -17,6 +17,7 @@ from errors import RequestError
 from gateway import Gateway
 from misc import dict_cls
 
+# TODO should this be cleared periodically ?
 message_cache: Dict[str, Union[discord.Webhook, str]] = {}
 
 
@@ -71,7 +72,7 @@ class MatrixClient(AppService):
         self.join_room(event.room_id)
 
     def on_message(self, message: matrix.Event) -> None:
-        if self.to_return(message) or not message.body:
+        if self.to_return(message):
             return
 
         # Handle bridging commands.
@@ -85,16 +86,24 @@ class MatrixClient(AppService):
         webhook = self.discord.get_webhook(channel_id, "matrix_bridge")
 
         if message.relates_to and message.reltype == "m.replace":
+            if not message.new_body:  # Empty message.
+                return
+
             # The message was edited.
             relation = message_cache.get(message.relates_to)
 
             if relation:
-                message.new_body = self.process_message(message.new_body)
+                message.new_body = self.process_message(
+                    channel_id, message.new_body
+                )
                 self.discord.edit_webhook(
                     message.new_body, relation["message_id"], webhook
                 )
         else:
-            message.body = self.process_message(message.body)
+            if not message.body:  # Empty message.
+                return
+
+            message.body = self.process_message(channel_id, message.body)
             message_cache[message.event_id] = {
                 "message_id": self.discord.send_webhook(message, webhook),
                 "webhook": webhook,
@@ -119,12 +128,11 @@ class MatrixClient(AppService):
             "name": channel.name,
             "topic": channel.topic,
             "visibility": "private",
-            "invite": [sender],
             "creation_content": {"m.federate": True},
             "initial_state": [
                 {
                     "type": "m.room.join_rules",
-                    "content": {"join_rule": "invite"},
+                    "content": {"join_rule": "public"},
                 },
                 {
                     "type": "m.room.history_visibility",
@@ -218,10 +226,11 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
 
         return message
 
-    def process_message(self, message: str) -> str:
+    def process_message(self, channel_id: str, message: str) -> str:
         message = message[:2000]  # Discord limit.
 
         emotes = re.findall(r":(\w*):", message)
+        mentions = re.findall(r"(@(\w*))", message)
 
         added_emotes = []
         for emote in emotes:
@@ -231,6 +240,21 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
                 emote_ = self.discord.emote_cache.get(emote)
                 if emote_:
                     message = message.replace(f":{emote}:", emote_)
+
+        # Don't unnecessarily fetch the channel.
+        if mentions:
+            guild_id = self.discord.get_channel(channel_id).guild_id
+
+        for mention in mentions:
+            if not mention[1]:
+                continue
+
+            self.logger.info(f"Querying {mention}")
+
+            member = self.discord.query_member(guild_id, mention[1])
+
+            if member:
+                message = message.replace(mention[0], member.mention)
 
         return message
 

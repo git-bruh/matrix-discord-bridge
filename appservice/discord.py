@@ -23,6 +23,7 @@ class User(object):
     def __init__(self, user: dict) -> None:
         self.discriminator = user["discriminator"]
         self.id = user["id"]
+        self.mention = f"<@{self.id}>"
         self.username = user["username"]
 
         avatar = user["avatar"]
@@ -123,13 +124,18 @@ class GatewayOpCodes(object):
 
 
 class Payloads(object):
-    def __init__(self, token: str, seq: int, session_id: str) -> None:
-        self.HEARTBEAT = {"op": GatewayOpCodes.HEARTBEAT, "d": seq}
+    def __init__(self, token: str) -> None:
+        self.seq = self.session = None
+        self.token = token
 
-        self.IDENTIFY = {
+    def HEARTBEAT(self) -> dict:
+        return {"op": GatewayOpCodes.HEARTBEAT, "d": self.seq}
+
+    def IDENTIFY(self) -> dict:
+        return {
             "op": GatewayOpCodes.IDENTIFY,
             "d": {
-                "token": token,
+                "token": self.token,
                 "intents": GatewayIntents.GUILDS
                 | GatewayIntents.GUILD_MESSAGES
                 | GatewayIntents.GUILD_MESSAGE_TYPING,
@@ -141,7 +147,23 @@ class Payloads(object):
             },
         }
 
-        self.RESUME = {
+    def QUERY(self, guild_id: str, query: str, limit: int = 1) -> dict:
+        """
+        Return the Payload to query a member from a guild ID.
+        Return only a single match if `limit` isn't specified.
+        """
+
+        return {
+            "op": GatewayOpCodes.REQUEST_GUILD_MEMBERS,
+            "d": {"guild_id": guild_id, "query": query, "limit": limit},
+        }
+
+    def RESUME(self) -> dict:
+        return {
             "op": GatewayOpCodes.RESUME,
-            "d": {"token": token, "session_id": session_id, "seq": seq},
+            "d": {
+                "token": self.token,
+                "session_id": self.session,
+                "seq": self.seq,
+            },
         }

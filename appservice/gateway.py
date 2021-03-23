@@ -9,7 +9,7 @@ import websockets
 
 import discord
 from errors import RequestError
-from misc import dict_cls, log_except
+from misc import dict_cls, log_except, wrap_async
 
 
 class Gateway(object):
@@ -18,10 +18,16 @@ class Gateway(object):
         self.token = token
         self.logger = logging.getLogger("discord")
         self.cdn_url = "https://cdn.discordapp.com"
-        self.heartbeat_task = self.resume = self.seq = self.session = None
+        self.Payloads = discord.Payloads(self.token)
+        self.heartbeat_task = self.loop = self.resume = self.websocket = None
+
+        self.query_cache = {}
 
     @log_except
     async def run(self) -> None:
+        self.loop = asyncio.get_running_loop()
+        self.query_ev = asyncio.Event()
+
         while True:
             try:
                 await self.gateway_handler(self.get_gateway_url())
@@ -39,16 +45,25 @@ class Gateway(object):
 
         return resp["url"]
 
-    async def heartbeat_handler(self, websocket, interval_ms: int) -> None:
+    async def heartbeat_handler(self, interval_ms: int) -> None:
         while True:
+            if not self.websocket or self.websocket.closed:
+                self.logger.info("Websocket closed, not sending heartbeat.")
+                await asyncio.sleep(0.25)  # Don't spam.
+                continue
+
             await asyncio.sleep(interval_ms / 1000)
-            await websocket.send(
-                json.dumps(
-                    discord.Payloads(
-                        self.token, self.seq, self.session
-                    ).HEARTBEAT
-                )
-            )
+            await self.websocket.send(json.dumps(self.Payloads.HEARTBEAT()))
+
+    def query_handler(self, data: dict) -> None:
+        members = data["members"]
+        guild_id = data["guild_id"]
+
+        for member in members:
+            user = member["user"]
+            self.query_cache[guild_id].append(user)
+
+        self.query_ev.set()
 
     def handle_otype(self, data: dict, otype: str) -> None:
         if data.get("embeds"):
@@ -60,6 +75,9 @@ class Gateway(object):
             obj = dict_cls(data, discord.DeletedMessage)
         elif otype == "TYPING_START":
             obj = dict_cls(data, discord.Typing)
+        elif otype == "GUILD_MEMBERS_CHUNK":
+            self.query_handler(data)
+            return
         else:
             self.logger.info(f"Unknown OTYPE: {otype}")
             return
@@ -80,6 +98,7 @@ class Gateway(object):
         async with websockets.connect(
             f"{gateway_url}/?v=8&encoding=json"
         ) as websocket:
+            self.websocket = websocket
             async for message in websocket:
                 data = json.loads(message)
                 data_dict = data.get("d")
@@ -88,13 +107,13 @@ class Gateway(object):
 
                 seq = data.get("s")
                 if seq:
-                    self.seq = seq
+                    self.Payloads.seq = seq
 
                 if opcode == discord.GatewayOpCodes.DISPATCH:
                     otype = data.get("t")
 
                     if otype == "READY":
-                        self.session = data_dict["session_id"]
+                        self.Payloads.session = data_dict["session_id"]
 
                         self.logger.info("READY")
 
@@ -116,16 +135,14 @@ class Gateway(object):
 
                     # Send periodic hearbeats to gateway.
                     self.heartbeat_task = asyncio.ensure_future(
-                        self.heartbeat_handler(websocket, heartbeat_interval)
-                    )
-
-                    payload = discord.Payloads(
-                        self.token, self.seq, self.session
+                        self.heartbeat_handler(heartbeat_interval)
                     )
 
                     await websocket.send(
                         json.dumps(
-                            payload.RESUME if self.resume else payload.IDENTIFY
+                            self.Payloads.RESUME()
+                            if self.resume
+                            else self.Payloads.IDENTIFY()
                         )
                     )
 
@@ -151,10 +168,50 @@ class Gateway(object):
                         f"{json.dumps(data, indent=4)}"
                     )
 
+    @wrap_async
+    async def query_member(self, guild_id: str, name: str) -> discord.User:
+        """
+        Query the members for a given guild and return the first match.
+        """
+
+        self.query_ev.clear()
+
+        def query():
+            if not self.query_cache.get(guild_id):
+                self.query_cache[guild_id] = []
+
+            user = [
+                user
+                for user in self.query_cache[guild_id]
+                if name.lower() in user["username"].lower()
+            ]
+
+            return None if not user else discord.User(user[0])
+
+        user = query()
+
+        if user:
+            return user
+
+        if not self.websocket or self.websocket.closed:
+            self.logger.warning("Not fetching members, websocket closed.")
+            return
+
+        await self.websocket.send(
+            json.dumps(self.Payloads.QUERY(guild_id, name))
+        )
+
+        # Wait for our websocket to receive the chunk.
+        await self.query_ev.wait()
+
+        return query()
+
     def get_channel(self, channel_id: str) -> discord.Channel:
         """
         Get the channel object for a given channel ID.
         """
+
+        # TODO cache
 
         resp = self.send("GET", f"/channels/{channel_id}")
 

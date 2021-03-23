@@ -1,3 +1,4 @@
+import asyncio
 from dataclasses import fields
 from typing import Any
 
@@ -25,5 +26,24 @@ def log_except(fn):
         except Exception:
             self.logger.exception(f"Exception in '{fn.__name__}':")
             raise
+
+    return wrapper
+
+
+def wrap_async(fn):
+    """
+    Call an asynchronous function from a synchronous one.
+    Class of the asynchronous function must have the `self.loop` variable.
+    """
+
+    def wrapper(self, *args, **kwargs):
+        loop = self.loop
+
+        if not loop:
+            return
+
+        return asyncio.run_coroutine_threadsafe(
+            fn(self, *args, **kwargs), loop=loop
+        ).result()
 
     return wrapper

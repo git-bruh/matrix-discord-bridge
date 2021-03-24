@@ -545,11 +545,27 @@ class DiscordClient(Gateway):
 
     def process_message(self, message: discord.Message) -> Tuple[str, str]:
         content = message.content
-        regex = r"<a?:(\w+):(\d+)>"
         emotes = {}
+        regex = r"<a?:(\w+):(\d+)>"
+        regex_channel = r"<#([0-9]+)>"
+
+        # Mentions can either be in the form of `<@1234>` or `<@!1234>`.
+        for char in ("", "!"):
+            for member in message.mentions:
+                content = content.replace(
+                    f"<@{char}{member.id}>", f"@{member.username}"
+                )
+
+        # `except_deleted` for invalid channels.
+        for channel in re.findall(regex_channel, content):
+            channel_ = except_deleted(self.get_channel)(channel)
+            content = content.replace(
+                f"<#{channel}>",
+                f"#{channel_.name}" if channel_ else "deleted-channel",
+            )
 
         # { "emote_name": "emote_id" }
-        for emote in re.findall(regex, message.content):
+        for emote in re.findall(regex, content):
             emotes[emote[0]] = emote[1]
 
         # Replace emote IDs with names.

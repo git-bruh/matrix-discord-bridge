@@ -47,6 +47,10 @@ class Message(object):
         self.reference = message.get("reference", {}).get("message_id", "")
         self.webhook_id = message.get("webhook_id", "")
 
+        self.mentions = [
+            User(mention) for mention in message.get("mentions", [])
+        ]
+
         author = message.get("author")
 
         self.author = User(author) if author else None

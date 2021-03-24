@@ -85,14 +85,16 @@ class Gateway(object):
             return
 
         func = f"on_{otype.lower()}"  # Eg. `on_message_create`
+        func = getattr(self, func, None)
 
-        try:
-            # TODO better method
-            getattr(self, func)(obj)
-        except AttributeError:
+        if not func:
             self.logger.warning(
                 f"Function '{func}' not defined, ignoring message."
             )
+            return
+
+        try:
+            func(obj)
         except Exception:
             self.logger.exception(f"Ignoring exception in {func}:")
 

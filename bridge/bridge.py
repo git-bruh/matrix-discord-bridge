@@ -15,19 +15,6 @@ import nio
 
 
 def config_gen(config_file):
-    global basedir
-
-    try:
-        basedir = sys.argv[1]
-        if not os.path.exists(basedir):
-            print(f"Path '{basedir}' does not exist!")
-            sys.exit(1)
-        basedir = os.path.abspath(basedir)
-    except IndexError:
-        basedir = os.getcwd()
-
-    config_file = f"{basedir}/{config_file}"
-
     config_dict = {
         "homeserver": "https://matrix.org",
         "username": "@name:matrix.org",
@@ -515,8 +502,8 @@ class Callbacks(object):
             return
 
     async def process_message(self, message, channel_id):
-        mentions = re.findall(r"(^|\s)(@(\w*))", message)
         emotes = re.findall(r":(\w*):", message)
+        mentions = re.findall(r"(@(\w*))", message)
 
         # Get the guild from channel ID.
         guild = self.discord_client.channel_store[channel_id].guild
@@ -531,15 +518,15 @@ class Callbacks(object):
                 if emote_:
                     message = message.replace(f":{emote}:", str(emote_))
 
-        # mentions = [('', '@name', 'name'), (' ', '@', '')]
+        # mentions = [('@name', 'name'), ('@', '')]
         for mention in mentions:
             # Don't fetch member if mention is empty.
             # Single "@" without any name.
-            if mention[2]:
-                member = await guild.query_members(query=mention[2])
+            if mention[1]:
+                member = await guild.query_members(query=mention[1])
                 if member:
                     # Get first result.
-                    message = message.replace(mention[1], member[0].mention)
+                    message = message.replace(mention[0], member[0].mention)
 
         return message
 
@@ -550,7 +537,7 @@ async def main():
         format="%(asctime)s %(name)s:%(levelname)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
         handlers=[
-            logging.FileHandler(f"{basedir}/bridge.log"),
+            logging.FileHandler("bridge.log"),
             logging.StreamHandler(),
         ],
     )

@@ -15,7 +15,7 @@ from appservice import AppService
 from db import DataBase
 from errors import RequestError
 from gateway import Gateway
-from misc import dict_cls
+from misc import dict_cls, except_deleted
 
 # TODO should this be cleared periodically ?
 message_cache: Dict[str, Union[discord.Webhook, str]] = {}
@@ -86,37 +86,47 @@ class MatrixClient(AppService):
         webhook = self.discord.get_webhook(channel_id, "matrix_bridge")
 
         if message.relates_to and message.reltype == "m.replace":
-            if not message.new_body:  # Empty message.
-                return
 
-            # The message was edited.
             relation = message_cache.get(message.relates_to)
 
-            if relation:
-                message.new_body = self.process_message(
-                    channel_id, message.new_body
-                )
-                self.discord.edit_webhook(
-                    message.new_body, relation["message_id"], webhook
-                )
+            if not message.new_body or not relation:
+                return
+
+            message.new_body = self.process_message(
+                channel_id, message.new_body
+            )
+
+            except_deleted(self.discord.edit_webhook)(
+                message.new_body, relation["message_id"], webhook
+            )
+
         else:
-            if not message.body:  # Empty message.
+            if not message.body:
                 return
 
             message.body = self.process_message(channel_id, message.body)
             message_cache[message.event_id] = {
-                "message_id": self.discord.send_webhook(message, webhook),
+                "message_id": self.discord.send_webhook(
+                    webhook,
+                    avatar_url=message.author.avatar_url,
+                    content=message.body,
+                    username=message.author.displayname,
+                ),
                 "webhook": webhook,
             }
 
+    @except_deleted
     def on_redaction(self, event: dict) -> None:
         redacts = event["redacts"]
 
         event = message_cache.get(redacts)
 
-        if event:
-            self.discord.delete_webhook(event["message_id"], event["webhook"])
-            message_cache.pop(redacts)
+        if not event:
+            return
+
+        self.discord.delete_webhook(event["message_id"], event["webhook"])
+
+        message_cache.pop(redacts)
 
     def create_room(self, channel: discord.Channel, sender: str) -> None:
         """
@@ -470,9 +480,12 @@ class DiscordClient(Gateway):
     def on_message_delete(self, message: discord.DeletedMessage) -> None:
         event = message_cache.get(message.id)
 
-        if event:
-            self.app.redact(event["event_id"], event["room_id"], event["mxid"])
-            message_cache.pop(message.id)
+        if not event:
+            return
+
+        self.app.redact(event["event_id"], event["room_id"], event["mxid"])
+
+        message_cache.pop(message.id)
 
     def on_message_update(self, message: dict) -> None:
         if self.to_return(message):
@@ -480,13 +493,16 @@ class DiscordClient(Gateway):
 
         event = message_cache.get(message.id)
 
+        if not event:
+            return
+
         content, emotes = self.process_message(message)
 
-        if event:
-            content = self.app.create_message_event(
-                content, emotes, edit=event["event_id"]
-            )
-            self.app.send_message(event["room_id"], content, event["mxid"])
+        content = self.app.create_message_event(
+            content, emotes, edit=event["event_id"]
+        )
+
+        self.app.send_message(event["room_id"], content, event["mxid"])
 
     def on_typing_start(self, typing: discord.Typing) -> None:
         if typing.channel_id not in self.app.db.list_channels():
@@ -508,6 +524,7 @@ class DiscordClient(Gateway):
 
         # Check the cache first.
         webhook = self.webhook_cache.get(channel_id)
+
         if webhook:
             return webhook
 
@@ -527,26 +544,6 @@ class DiscordClient(Gateway):
         self.webhook_cache[channel_id] = webhook
 
         return webhook
-
-    def send_webhook(
-        self, message: matrix.Event, webhook: discord.Webhook
-    ) -> str:
-        content = {
-            "avatar_url": message.author.avatar_url,
-            "content": message.body,
-            "username": message.author.displayname,
-            # Disable 'everyone' and 'role' mentions.
-            "allowed_mentions": {"parse": ["users"]},
-        }
-
-        resp = self.send(
-            "POST",
-            f"/webhooks/{webhook.id}/{webhook.token}",
-            content,
-            {"wait": True},
-        )
-
-        return resp["id"]
 
     def process_message(self, message: discord.Message) -> Tuple[str, str]:
         content = message.content

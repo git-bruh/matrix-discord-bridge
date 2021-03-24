@@ -8,8 +8,7 @@ import urllib3
 import websockets
 
 import discord
-from errors import RequestError
-from misc import dict_cls, log_except, wrap_async
+from misc import dict_cls, log_except, request, wrap_async
 
 
 class Gateway(object):
@@ -19,7 +18,7 @@ class Gateway(object):
         self.logger = logging.getLogger("discord")
         self.cdn_url = "https://cdn.discordapp.com"
         self.Payloads = discord.Payloads(self.token)
-        self.heartbeat_task = self.loop = self.resume = self.websocket = None
+        self.loop = self.websocket = None
 
         self.query_cache = {}
 
@@ -28,12 +27,15 @@ class Gateway(object):
         self.loop = asyncio.get_running_loop()
         self.query_ev = asyncio.Event()
 
+        self.heartbeat_task = None
+        self.resume = False
+
         while True:
             try:
                 await self.gateway_handler(self.get_gateway_url())
-            except websockets.ConnectionClosedError as e:
+            except websockets.ConnectionClosedError:
                 # TODO reconnect ?
-                self.logger.critical(f"Quitting, connection lost: {e}")
+                self.logger.exception("Quitting, connection lost")
                 break
 
             # Stop sending heartbeats until we reconnect.
@@ -251,37 +253,44 @@ class Gateway(object):
     def edit_webhook(
         self, content: str, message_id: str, webhook: discord.Webhook
     ) -> None:
-        try:
-            self.send(
-                "PATCH",
-                f"/webhooks/{webhook.id}/{webhook.token}/messages/"
-                f"{message_id}",
-                {"content": content},
-            )
-        except RequestError as e:
-            self.logger.warning(
-                f"Failed to edit webhook message {message_id}: {e}"
-            )
+        self.send(
+            "PATCH",
+            f"/webhooks/{webhook.id}/{webhook.token}/messages/"
+            f"{message_id}",
+            {"content": content},
+        )
 
     def delete_webhook(
         self, message_id: str, webhook: discord.Webhook
     ) -> None:
-        try:
-            self.send(
-                "DELETE",
-                f"/webhooks/{webhook.id}/{webhook.token}/messages/"
-                f"{message_id}",
-            )
-        except RequestError as e:
-            self.logger.warning(
-                f"Failed to delete webhook message {message_id}: {e}"
-            )
+        self.send(
+            "DELETE",
+            f"/webhooks/{webhook.id}/{webhook.token}/messages/"
+            f"{message_id}",
+        )
+
+    def send_webhook(self, webhook: discord.Webhook, **kwargs) -> str:
+        content = {
+            **kwargs,
+            # Disable 'everyone' and 'role' mentions.
+            "allowed_mentions": {"parse": ["users"]},
+        }
+
+        resp = self.send(
+            "POST",
+            f"/webhooks/{webhook.id}/{webhook.token}",
+            content,
+            {"wait": True},
+        )
+
+        return resp["id"]
 
     def send_message(self, message: str, channel_id: str) -> None:
         self.send(
             "POST", f"/channels/{channel_id}/messages", {"content": message}
         )
 
+    @request
     def send(
         self, method: str, path: str, content: dict = {}, params: dict = {}
     ) -> dict:
@@ -297,16 +306,6 @@ class Gateway(object):
         # 'body' being an empty dict breaks "GET" requests.
         content = json.dumps(content) if content else None
 
-        try:
-            resp = self.http.request(
-                method, endpoint, body=content, headers=headers
-            )
-        except urllib3.exceptions.HTTPError as e:
-            raise RequestError(f"Failed to connect to Discord: {e}") from None
-
-        if resp.status < 200 or resp.status >= 300:
-            raise RequestError(
-                f"Failed to '{method}' '{resp.geturl()}':\n{resp.data}"
-            )
-
-        return {} if resp.status == 204 else json.loads(resp.data)
+        return self.http.request(
+            method, endpoint, body=content, headers=headers
+        )

@@ -8,8 +8,7 @@ import bottle
 import urllib3
 
 import matrix
-from errors import RequestError
-from misc import dict_cls, log_except
+from misc import dict_cls, log_except, request
 
 
 class AppService(bottle.Bottle):
@@ -189,6 +188,7 @@ class AppService(bottle.Bottle):
     def send_invite(self, room_id: str, mxid: str) -> None:
         self.send("POST", f"/rooms/{room_id}/invite", {"user_id": mxid})
 
+    @request
     def send(
         self,
         method: str,
@@ -206,18 +206,6 @@ class AppService(bottle.Bottle):
             f"{urllib.parse.urlencode(params)}"
         )
 
-        try:
-            resp = self.http.request(
-                method, endpoint, body=content, headers=headers
-            )
-        except urllib3.exceptions.HTTPError as e:
-            raise RequestError(
-                f"Failed to connect to the homeserver: {e}"
-            ) from None
-
-        if resp.status < 200 or resp.status >= 300:
-            raise RequestError(
-                f"Failed to '{method}' '{resp.geturl()}':\n{resp.data}"
-            )
-
-        return json.loads(resp.data)
+        return self.http.request(
+            method, endpoint, body=content, headers=headers
+        )

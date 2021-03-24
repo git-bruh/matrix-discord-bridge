@@ -35,7 +35,7 @@ class Gateway(object):
                 await self.gateway_handler(self.get_gateway_url())
             except websockets.ConnectionClosedError:
                 # TODO reconnect ?
-                self.logger.exception("Quitting, connection lost")
+                self.logger.exception("Quitting, connection lost.")
                 break
 
             # Stop sending heartbeats until we reconnect.

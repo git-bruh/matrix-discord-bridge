@@ -259,8 +259,6 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
             if not mention[1]:
                 continue
 
-            self.logger.info(f"Querying {mention}")
-
             member = self.discord.query_member(guild_id, mention[1])
 
             if member:

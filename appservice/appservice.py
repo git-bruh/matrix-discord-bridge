@@ -111,7 +111,7 @@ class AppService(bottle.Bottle):
         avatar_url = resp.get("avatar_url", "")[6:].split("/")
         avatar_url = (
             (
-                f"{self.base_url}/_matrix/media/r0/download/"
+                f"https://{self.server_name}/_matrix/media/r0/download/"
                 f"{avatar_url[0]}/{avatar_url[1]}"
             )
             if len(avatar_url) > 1

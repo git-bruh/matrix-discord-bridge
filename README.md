@@ -3,11 +3,11 @@
 A simple bridge between Matrix and Discord written in Python.
 
 This repository contains two bridges:
-* A [puppeting appservice]: The puppeting bridge written without any helper libraries and minimal dependencies. Running this requires a self-hosted homeserver.
+* A [puppeting appservice]: The puppeting bridge written wit minimal dependencies. Running this requires a self-hosted homeserver.
 
 * A [non-puppeting bridge]: The non-puppeting bridge written with `matrix-nio` and `discord.py`, most people would want to use this one.
 
-Check their respective `README.md`'s for more information.
+Check their READMEs for specific information.
 
 NOTE: [Privileged Intents](https://discordpy.readthedocs.io/en/latest/intents.html#privileged-intents) must be enabled for your Discord bot.
 

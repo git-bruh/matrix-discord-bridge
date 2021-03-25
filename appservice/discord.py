@@ -44,7 +44,7 @@ class Message(object):
         self.channel_id = message["channel_id"]
         self.content = message.get("content", "")
         self.id = message["id"]
-        self.reference = message.get("reference", {}).get("message_id", "")
+        self.reference = message.get("message_reference", {}).get("message_id", "")
         self.webhook_id = message.get("webhook_id", "")
 
         self.mentions = [

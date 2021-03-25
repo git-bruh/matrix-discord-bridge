@@ -49,16 +49,17 @@ class AppService(bottle.Bottle):
             self.logger.info(f"Unknown event type: {event_type}")
             return
 
-        func = self.mapping[event_type]
+        func = getattr(self, self.mapping[event_type], None)
 
-        try:
-            getattr(self, func)(obj)
-        except AttributeError:
+        if not func:
             self.logger.warning(
                 f"Function '{func}' not defined, ignoring event."
             )
-        except Exception:
-            self.logger.exception(f"Ignoring exception in '{func}':")
+            return
+
+        # We don't catch exceptions here as the homeserver will re-send us
+        # the event in case of a failure.
+        func(obj)
 
     @log_except
     def receive_event(self, transaction: str) -> dict:

@@ -89,3 +89,18 @@ def except_deleted(fn):
                 raise
 
     return wrapper
+
+
+def set_event(fn):
+    """
+    Clear and set the `threading.Event` object.
+    """
+
+    def wrapper(self, *args, **kwargs):
+        self.event.wait()
+        self.event.clear()
+        result = fn(self, *args, **kwargs)
+        self.event.set()
+        return result
+
+    return wrapper

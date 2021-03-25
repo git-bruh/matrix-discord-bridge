@@ -84,8 +84,7 @@ class Gateway(object):
             self.logger.info(f"Unknown OTYPE: {otype}")
             return
 
-        func = f"on_{otype.lower()}"  # Eg. `on_message_create`
-        func = getattr(self, func, None)
+        func = getattr(self, f"on_{otype.lower()}", None)
 
         if not func:
             self.logger.warning(

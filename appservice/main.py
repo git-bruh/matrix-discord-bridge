@@ -249,7 +249,7 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
         mentions = re.findall(r"(@(\w*))", message)
 
         # Remove the puppet user's username from replies.
-        content = re.sub(f"<@{self.app.format}.+?>", "", content)
+        message = re.sub(f"<@{self.format}.+?>", "", message)
 
         added_emotes = []
         for emote in emotes:

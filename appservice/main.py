@@ -364,6 +364,8 @@ class DiscordClient(Gateway):
                 )
 
         def sync_users(guilds: set):
+            # TODO use websockets for this, using IDs from database.
+
             users = []
 
             for guild in guilds:

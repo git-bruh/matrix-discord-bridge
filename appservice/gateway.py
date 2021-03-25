@@ -121,13 +121,7 @@ class Gateway(object):
                         self.logger.info("READY")
 
                     else:
-                        # TODO remove temporary try except for testing.
-                        try:
-                            self.handle_otype(data_dict, otype)
-                        except Exception:
-                            self.logger.exception(
-                                json.dumps(data_dict, indent=4)
-                            )
+                        self.handle_otype(data_dict, otype)
 
                 elif opcode == discord.GatewayOpCodes.HELLO:
                     heartbeat_interval = data_dict.get("heartbeat_interval")
@@ -213,8 +207,6 @@ class Gateway(object):
         """
         Get the channel object for a given channel ID.
         """
-
-        # TODO cache
 
         resp = self.send("GET", f"/channels/{channel_id}")
 

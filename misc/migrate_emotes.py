@@ -17,7 +17,7 @@ def config_gen(config_file):
         "username": "@name:matrix.org",
         "password": "my-secret-password",
         "token": "my-secret-token",
-        "migrate": {"guild_id": "room_id"}
+        "migrate": {"guild_id": "room_id"},
     }
 
     if not os.path.exists(config_file):
@@ -66,16 +66,12 @@ class MatrixClient(nio.AsyncClient):
             await f.write(emote_)
 
         async with aiofiles.open(emote_file, "rb") as f:
-            resp, maybe_keys = await self.upload(
-                f, content_type=content_type
-            )
+            resp, maybe_keys = await self.upload(f, content_type=content_type)
 
         await aiofiles.os.remove(emote_file)
 
         if type(resp) != nio.UploadResponse:
-            self.logger.warning(
-                f"Failed to upload {emote_name}"
-            )
+            self.logger.warning(f"Failed to upload {emote_name}")
             return
 
         self.logger.info(f"Uploaded {emote_name}")
@@ -101,9 +97,7 @@ class MatrixClient(nio.AsyncClient):
         resp = await self.room_put_state(room_id, event_type, content)
 
         if type(resp) == nio.RoomPutStateError:
-            self.logger.warning(
-                f"Failed to send emote state: {resp}"
-            )
+            self.logger.warning(f"Failed to send emote state: {resp}")
 
 
 class DiscordClient(discord.Client):
@@ -115,8 +109,8 @@ class DiscordClient(discord.Client):
         )
 
         self.bg_task = self.loop.create_task(
-                    self.log_exceptions(self.matrix_client)
-                )
+            self.log_exceptions(self.matrix_client)
+        )
 
         self.logger = logging.getLogger("discord_logger")
 
@@ -138,9 +132,9 @@ class DiscordClient(discord.Client):
                     f"Guild: {emote_guild.name} Room: {emote_room}"
                 )
 
-                await asyncio.gather(*map(
-                    self.matrix_client.upload_emote, emote_guild.emojis
-                ))
+                await asyncio.gather(
+                    *map(self.matrix_client.upload_emote, emote_guild.emojis)
+                )
 
                 self.logger.info("Sending state event to room...")
 

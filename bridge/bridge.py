@@ -3,9 +3,9 @@ import json
 import logging
 import os
 import re
-import traceback
 import sys
 import uuid
+
 import aiofiles
 import aiofiles.os
 import aiohttp
@@ -20,8 +20,8 @@ def config_gen(config_file):
         "username": "@name:matrix.org",
         "password": "my-secret-password",
         "token": "my-secret-token",
-        "discord_prefix": "my-command-prefix",
-        "bridge": {"channel_id": "room_id"}
+        "discord_cmd_prefix": "my-command-prefix",
+        "bridge": {"channel_id": "room_id"},
     }
 
     if not os.path.exists(config_file):
@@ -37,7 +37,6 @@ def config_gen(config_file):
 
 
 config = config_gen("config.json")
-
 message_store = {}
 
 
@@ -56,17 +55,17 @@ class MatrixClient(nio.AsyncClient):
         self.add_callbacks()
 
     def start_discord(self):
-        # Disable everyone and role mentions.
-        allowed_mentions = discord.AllowedMentions(everyone=False, roles=False)
-        # Set command prefix for Discord bot.
-        command_prefix = config["discord_prefix"]
         # Intents to fetch members from guild.
         intents = discord.Intents.default()
         intents.members = True
 
         self.discord_client = DiscordClient(
-            self, allowed_mentions=allowed_mentions,
-            command_prefix=command_prefix, intents=intents
+            self,
+            allowed_mentions=discord.AllowedMentions(
+                everyone=False, roles=False
+            ),
+            command_prefix=config["discord_cmd_prefix"],
+            intents=intents,
         )
 
         self.bg_task = self.loop.create_task(
@@ -78,8 +77,7 @@ class MatrixClient(nio.AsyncClient):
 
         self.add_event_callback(
             callbacks.message_callback,
-            (nio.RoomMessageText, nio.RoomMessageMedia,
-             nio.RoomMessageEmote)
+            (nio.RoomMessageText, nio.RoomMessageMedia, nio.RoomMessageEmote),
         )
 
         self.add_event_callback(
@@ -107,16 +105,12 @@ class MatrixClient(nio.AsyncClient):
             await f.write(emote)
 
         async with aiofiles.open(emote_file, "rb") as f:
-            resp, maybe_keys = await self.upload(
-                f, content_type=content_type
-            )
+            resp, maybe_keys = await self.upload(f, content_type=content_type)
 
         await aiofiles.os.remove(emote_file)
 
         if type(resp) != nio.UploadResponse:
-            self.logger.warning(
-                f"Failed to upload emote {emote_id}"
-            )
+            self.logger.warning(f"Failed to upload emote {emote_id}")
             return
 
         self.uploaded_emotes[emote_id] = resp.content_uri
@@ -125,18 +119,18 @@ class MatrixClient(nio.AsyncClient):
 
     async def get_fmt_body(self, body, emotes):
         replace_ = [
-                # Code blocks
-                ("```", "<pre><code>", "</code></pre>"),
-                # Spoilers
-                ("||", "<span data-mx-spoiler>", "</span>"),
-                # Strikethrough
-                ("~~", "<del>", "</del>")
-            ]
+            # Bold.
+            ("**", "<strong>", "</strong>"),
+            # Code blocks.
+            ("```", "<pre><code>", "</code></pre>"),
+            # Spoilers.
+            ("||", "<span data-mx-spoiler>", "</span>"),
+            # Strikethrough.
+            ("~~", "<del>", "</del>"),
+        ]
 
         for replace in replace_:
-            for i in range(body.count(replace[0])):
-                i += 1
-
+            for i in range(1, body.count(replace[0]) + 1):
                 if i % 2:
                     body = body.replace(replace[0], replace[1], 1)
                 else:
@@ -147,77 +141,85 @@ class MatrixClient(nio.AsyncClient):
             if emote_:
                 emote = f":{emote}:"
                 body = body.replace(
-                    emote, f"""<img alt=\"{emote}\" title=\"{emote}\" \
-height=\"32\" src=\"{emote_}\" data-mx-emoticon />"""
+                    emote,
+                    f"""<img alt=\"{emote}\" title=\"{emote}\" \
+height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
                 )
 
         return body
 
-    async def message_send(self, message, channel_id, emotes,
-                           reply_id=None, edit_id=None):
+    async def message_send(
+        self, message, channel_id, emotes, reply_id=None, edit_id=None
+    ):
         room_id = config["bridge"][str(channel_id)]
 
         content = {
             "body": message,
             "format": "org.matrix.custom.html",
             "formatted_body": await self.get_fmt_body(message, emotes),
-            "msgtype": "m.text"
+            "msgtype": "m.text",
         }
 
         if reply_id:
-            reply_event = await self.room_get_event(
-                room_id, reply_id
-            )
+            reply_event = await self.room_get_event(room_id, reply_id)
             reply_event = reply_event.event
 
-            content["m.relates_to"] = {"m.in_reply_to": {"event_id": reply_id}}
-
-            content["formatted_body"] = f"""<mx-reply><blockquote>\
+            content = {
+                **content,
+                "m.relates_to": {"m.in_reply_to": {"event_id": reply_id}},
+                "formatted_body": f"""<mx-reply><blockquote>\
 <a href="https://matrix.to/#/{room_id}/{reply_id}">In reply to</a>\
 <a href="https://matrix.to/#/{reply_event.sender}">{reply_event.sender}</a>\
-<br>{reply_event.body}</blockquote></mx-reply>{content["formatted_body"]}"""
-
-        if edit_id:
-            content["body"] = f" * {content['body']}"
-
-            content["m.relates_to"] = {
-                "event_id": edit_id, "rel_type": "m.replace"
+<br>{reply_event.body}</blockquote></mx-reply>{content["formatted_body"]}""",
             }
 
-            content["m.new_content"] = {
-                    "body": content["body"],
-                    "formatted_body": content["formatted_body"],
-                    "format": content["format"],
-                    "msgtype": content["msgtype"]
+        if edit_id:
+            content = {
+                **content,
+                "body": f" * {content['body']}",
+                "formatted_body": f" * {content['formatted_body']}",
+                "m.relates_to": {"event_id": edit_id, "rel_type": "m.replace"},
+                "m.new_content": {**content},
             }
 
         message = await self.room_send(
-            room_id=room_id,
-            message_type="m.room.message",
-            content=content
+            room_id=room_id, message_type="m.room.message", content=content
         )
 
         return message.event_id
 
     async def message_redact(self, message, channel_id):
         await self.room_redact(
-            room_id=config["bridge"][str(channel_id)],
-            event_id=message
+            room_id=config["bridge"][str(channel_id)], event_id=message
         )
 
-    async def webhook_send(self, author, avatar, message,
-                           event_id, channel_id, embed=None):
+    async def webhook_send(
+        self, author, avatar, message, event_id, channel_id, embed=None
+    ):
         channel = self.discord_client.channel_store[channel_id]
 
-        # Recreate hook if it was deleted.
-        hook = await self.discord_client.hook_create(channel)
+        hook_name = "matrix_bridge"
+
+        hook = self.discord_client.webhook_cache.get(str(channel.id))
+
+        if not hook:
+            hooks = await channel.webhooks()
+            hook = discord.utils.get(hooks, name=hook_name)
+
+        if not hook:
+            hook = await channel.create_webhook(name=hook_name)
+
+        self.discord_client.webhook_cache[str(channel.id)] = hook
 
         # Username must be between 1 and 80 characters in length,
         # 'wait=True' allows us to store the sent message.
         try:
             hook = await hook.send(
-                username=author[:80], avatar_url=avatar,
-                content=message, embed=embed, wait=True
+                username=author[:80],
+                avatar_url=avatar,
+                content=message,
+                embed=embed,
+                wait=True,
             )
 
             message_store[event_id] = hook
@@ -232,7 +234,7 @@ class DiscordClient(discord.ext.commands.Bot):
 
         self.channel_store = {}
 
-        self.webhook_ids = set()
+        self.webhook_cache = {}
 
         self.ready = asyncio.Event()
 
@@ -251,36 +253,19 @@ class DiscordClient(discord.ext.commands.Bot):
                 cog = f"cogs.{cog[:-3]}"
                 self.load_extension(cog)
 
-    async def hook_create(self, channel):
-        hook_name = "matrix_bridge"
-
-        hooks = await channel.webhooks()
-
-        # Check if webhook exists.
-        hook = discord.utils.get(hooks, name=hook_name)
-        if not hook:
-            hook = await channel.create_webhook(name=hook_name)
-
-        self.webhook_ids.add(hook.id)
-
-        return hook
-
     async def to_return(self, channel_id, message=None):
         await self.matrix_client.ready.wait()
 
-        if str(channel_id) not in config["bridge"].keys():
-            return True
-
-        if message:
-            if message.webhook_id in self.webhook_ids:
-                return True
+        return str(channel_id) not in config["bridge"].keys() or (
+            message
+            and message.webhook_id
+            in [hook.id for hook in self.webhook_cache.values()]
+        )
 
     async def on_ready(self):
         for channel in config["bridge"].keys():
             channel_ = self.get_channel(int(channel))
             self.channel_store[channel] = channel_
-
-            await self.hook_create(channel_)
 
         self.ready.set()
 
@@ -294,8 +279,10 @@ class DiscordClient(discord.ext.commands.Bot):
         content = await self.process_message(message)
 
         matrix_message = await self.matrix_client.message_send(
-            content[0], message.channel.id,
-            reply_id=content[1], emotes=content[2]
+            content[0],
+            message.channel.id,
+            reply_id=content[1],
+            emotes=content[2],
         )
 
         message_store[message.id] = matrix_message
@@ -309,8 +296,10 @@ class DiscordClient(discord.ext.commands.Bot):
         # Edit message only if it can be looked up in the cache.
         if before.id in message_store:
             await self.matrix_client.message_send(
-                content[0], after.channel.id,
-                edit_id=message_store[before.id], emotes=content[2]
+                content[0],
+                after.channel.id,
+                edit_id=message_store[before.id],
+                emotes=content[2],
             )
 
     async def on_message_delete(self, message):
@@ -371,8 +360,12 @@ class Callbacks(object):
 
     def get_channel(self, room):
         channel_id = next(
-            (channel_id for channel_id, room_id in config["bridge"].items()
-                if room_id == room.room_id), None
+            (
+                channel_id
+                for channel_id, room_id in config["bridge"].items()
+                if room_id == room.room_id
+            ),
+            None,
         )
 
         return channel_id
@@ -380,10 +373,11 @@ class Callbacks(object):
     async def to_return(self, room, event):
         await self.matrix_client.discord_client.ready.wait()
 
-        if room.room_id not in config["bridge"].values() or \
-                event.sender == self.matrix_client.user or \
-                not self.matrix_client.listen:
-            return True
+        return (
+            room.room_id not in config["bridge"].values()
+            or event.sender == self.matrix_client.user
+            or not self.matrix_client.listen
+        )
 
     async def message_callback(self, room, event):
         message = event.body
@@ -418,7 +412,8 @@ class Callbacks(object):
                     await webhook_message.edit(content=edited_content)
                 # Handle exception if edited message was deleted on Discord.
                 except (
-                    discord.errors.NotFound, discord.errors.HTTPException
+                    discord.errors.NotFound,
+                    discord.errors.HTTPException,
                 ) as e:
                     self.matrix_client.logger.warning(
                         f"Failed to edit message {edited_event}: {e}"
@@ -429,9 +424,11 @@ class Callbacks(object):
             pass
 
         try:
-            if content_dict["m.relates_to"]["m.in_reply_to"]["event_id"] in \
-                    message_store.values():
-                # Remove the first occurance of our bot's username if replying.
+            if (
+                content_dict["m.relates_to"]["m.in_reply_to"]["event_id"]
+                in message_store.values()
+            ):
+                # Remove the first occurence of our bot's username if replying.
                 # > <@discordbridge:something.org> [discord user]
                 message = message.replace(f"<{config['username']}>", "", 1)
         except KeyError:
@@ -489,13 +486,14 @@ class Callbacks(object):
             pass
 
     async def typing_callback(self, room, event):
-        if not room.typing_users \
-                or room.room_id not in config["bridge"].values():
-            return
-
-        # Return if the event is sent by our bot.
-        if len(room.typing_users) == 1 and \
-                self.matrix_client.user in room.typing_users:
+        if (
+            not room.typing_users
+            or (
+                len(room.typing_users) == 1
+                and self.matrix_client.user in room.typing_users
+            )
+            or room.room_id not in config["bridge"].values()
+        ):
             return
 
         # Get the corresponding Discord channel.
@@ -506,8 +504,8 @@ class Callbacks(object):
             return
 
     async def process_message(self, message, channel_id):
-        mentions = re.findall(r"(^|\s)(@(\w*))", message)
         emotes = re.findall(r":(\w*):", message)
+        mentions = re.findall(r"(@(\w*))", message)
 
         # Get the guild from channel ID.
         guild = self.discord_client.channel_store[channel_id].guild
@@ -522,15 +520,15 @@ class Callbacks(object):
                 if emote_:
                     message = message.replace(f":{emote}:", str(emote_))
 
-        # mentions = [('', '@name', 'name'), (' ', '@', '')]
+        # mentions = [('@name', 'name'), ('@', '')]
         for mention in mentions:
             # Don't fetch member if mention is empty.
             # Single "@" without any name.
-            if mention[2]:
-                member = await guild.query_members(query=mention[2])
+            if mention[1]:
+                member = await guild.query_members(query=mention[1])
                 if member:
                     # Get first result.
-                    message = message.replace(mention[1], member[0].mention)
+                    message = message.replace(mention[0], member[0].mention)
 
         return message
 
@@ -538,17 +536,17 @@ class Callbacks(object):
 async def main():
     logging.basicConfig(
         level=logging.INFO,
+        format="%(asctime)s %(name)s:%(levelname)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
         handlers=[
-            logging.FileHandler("bot.log"),
-            logging.StreamHandler()
-        ]
+            logging.FileHandler("bridge.log"),
+            logging.StreamHandler(),
+        ],
     )
 
     retry = 2
 
-    matrix_client = MatrixClient(
-        config["homeserver"], config["username"]
-    )
+    matrix_client = MatrixClient(config["homeserver"], config["username"])
 
     while True:
         resp = await matrix_client.login(config["password"])
@@ -563,9 +561,7 @@ async def main():
         try:
             await matrix_client.sync(full_state=True)
         except Exception:
-            matrix_client.logger.error(
-                f"Initial sync failed!\n{traceback.format_exc()}"
-            )
+            matrix_client.logger.exception("Initial sync failed!")
             return False
 
         try:
@@ -576,9 +572,8 @@ async def main():
 
             await matrix_client.sync_forever(timeout=30000, full_state=True)
         except Exception:
-            matrix_client.logger.error(
-                f"Unknown exception occured\n{traceback.format_exc()}\n"
-                f"Retrying in {retry} seconds..."
+            matrix_client.logger.exception(
+                f"Unknown exception occured, retrying in {retry} seconds..."
             )
 
             # Clear "ready" status.
@@ -592,6 +587,7 @@ async def main():
             if matrix_client.listen:
                 await matrix_client.close()
                 return False
+
 
 if __name__ == "__main__":
     asyncio.run(main())

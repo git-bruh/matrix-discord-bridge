@@ -97,10 +97,19 @@ def set_event(fn):
     """
 
     def wrapper(self, *args, **kwargs):
+        # Wait for the event to be set before clearing it so that we don't
+        # clear and set the event before it is set by an in-progress function.
         self.event.wait()
+
         self.event.clear()
-        result = fn(self, *args, **kwargs)
-        self.event.set()
-        return result
+
+        try:
+            result = fn(self, *args, **kwargs)
+            self.event.set()
+            return result
+        # We don't want the event object to remain unset.
+        except Exception:
+            self.event.set()
+            raise
 
     return wrapper

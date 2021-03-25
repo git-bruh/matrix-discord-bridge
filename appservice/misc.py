@@ -40,13 +40,11 @@ def wrap_async(fn):
     """
 
     def wrapper(self, *args, **kwargs):
-        loop = self.loop
-
-        if not loop:
-            return
+        if not self.loop:
+            raise RuntimeError("loop is None.")
 
         return asyncio.run_coroutine_threadsafe(
-            fn(self, *args, **kwargs), loop=loop
+            fn(self, *args, **kwargs), loop=self.loop
         ).result()
 
     return wrapper

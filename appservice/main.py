@@ -46,7 +46,12 @@ class MatrixClient(AppService):
             return
 
         # Check if the given channel is valid.
-        channel = self.discord.get_channel(channel)
+        try:
+            channel = self.discord.get_channel(channel)
+        except RequestError as e:
+            # The channel can be invalid or we may not have permission.
+            self.logger.warning(f"Failed to fetch channel {channel}: {e}")
+            return
 
         if (
             channel.type != discord.ChannelType.GUILD_TEXT
@@ -260,7 +265,10 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
             if not mention[1]:
                 continue
 
-            member = self.discord.query_member(guild_id, mention[1])
+            try:
+                member = self.discord.query_member(guild_id, mention[1])
+            except (asyncio.TimeoutError, RuntimeError):
+                continue
 
             if member:
                 message = message.replace(mention[0], member.mention)

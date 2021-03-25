@@ -205,7 +205,7 @@ class Gateway(object):
         )
 
         # Wait for our websocket to receive the chunk.
-        await self.query_ev.wait()
+        await asyncio.wait_for(self.query_ev.wait(), timeout=5)
 
         return query()
 

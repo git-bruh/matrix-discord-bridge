@@ -248,6 +248,9 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
         emotes = re.findall(r":(\w*):", message)
         mentions = re.findall(r"(@(\w*))", message)
 
+        # Remove the puppet user's username from replies.
+        content = re.sub(f"<@{self.app.format}.+?>", "", content)
+
         added_emotes = []
         for emote in emotes:
             # Don't replace emote names with IDs multiple times.
@@ -556,7 +559,6 @@ class DiscordClient(Gateway):
         content = message.content
         emotes = {}
         regex = r"<a?:(\w+):(\d+)>"
-        regex_channel = r"<#([0-9]+)>"
 
         # Mentions can either be in the form of `<@1234>` or `<@!1234>`.
         for char in ("", "!"):
@@ -566,7 +568,7 @@ class DiscordClient(Gateway):
                 )
 
         # `except_deleted` for invalid channels.
-        for channel in re.findall(regex_channel, content):
+        for channel in re.findall(r"<#([0-9]+)>", content):
             channel_ = except_deleted(self.get_channel)(channel)
             content = content.replace(
                 f"<#{channel}>",

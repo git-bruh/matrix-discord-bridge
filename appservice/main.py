@@ -3,7 +3,6 @@ import json
 import logging
 import os
 import re
-import signal
 import sys
 import threading
 from typing import Dict, Tuple, Union
@@ -16,7 +15,7 @@ from appservice import AppService
 from db import DataBase
 from errors import RequestError
 from gateway import Gateway
-from misc import dict_cls, except_deleted, set_event
+from misc import dict_cls, except_deleted
 
 # TODO should this be cleared periodically ?
 message_cache: Dict[str, Union[discord.Webhook, str]] = {}
@@ -30,9 +29,6 @@ class MatrixClient(AppService):
         self.discord = DiscordClient(self, config, http)
         self.emote_cache: Dict[str, str] = {}
         self.format = "_discord_"  # "{@,#}_discord_1234:localhost"
-
-        self.event = threading.Event()
-        self.event.set()
 
     def to_return(self, event: matrix.Event) -> bool:
         return event.sender.startswith(("@_discord", self.user_id))
@@ -132,7 +128,6 @@ class MatrixClient(AppService):
 
         message_cache.pop(redacts)
 
-    @set_event
     def create_room(self, channel: discord.Channel, sender: str) -> None:
         """
         Create a bridged room and invite the person who invoked the command.
@@ -287,7 +282,6 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
         except RequestError as e:
             self.logger.warning(f"Failed to upload emote {emote_id}: {e}")
 
-    @set_event
     def register(self, mxid: str) -> None:
         """
         Register a dummy user on the homeserver.
@@ -634,28 +628,16 @@ def main() -> None:
 
     app = MatrixClient(config, http)
 
-    def handler(signum, frame):
-        logging.info(
-            f"Received signal '{signal.Signals(signum).name}', "
-            "waiting for AppService."
-        )
-        # Wait for the AppService to complete any important tasks like
-        # room or user creation.
-        app.event.wait()
-        sys.exit()
-
-    signal.signal(signal.SIGINT, handler)
-    signal.signal(signal.SIGTERM, handler)
-
     # Start the bottle app in a separate thread.
     app_thread = threading.Thread(
         target=app.run, kwargs={"port": int(config["port"])}, daemon=True
     )
     app_thread.start()
 
-    asyncio.run(app.discord.start())
-    # TODO remove this line once reconnection is implemented.
-    app.event.wait()
+    try:
+        asyncio.run(app.discord.start())
+    except KeyboardInterrupt:
+        sys.exit()
 
 
 if __name__ == "__main__":

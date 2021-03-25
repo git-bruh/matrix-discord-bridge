@@ -119,11 +119,13 @@ class MatrixClient(nio.AsyncClient):
 
     async def get_fmt_body(self, body, emotes):
         replace_ = [
-            # Code blocks
+            # Bold.
+            ("**", "<strong>", "</strong>"),
+            # Code blocks.
             ("```", "<pre><code>", "</code></pre>"),
-            # Spoilers
+            # Spoilers.
             ("||", "<span data-mx-spoiler>", "</span>"),
-            # Strikethrough
+            # Strikethrough.
             ("~~", "<del>", "</del>"),
         ]
 
@@ -426,7 +428,7 @@ class Callbacks(object):
                 content_dict["m.relates_to"]["m.in_reply_to"]["event_id"]
                 in message_store.values()
             ):
-                # Remove the first occurance of our bot's username if replying.
+                # Remove the first occurence of our bot's username if replying.
                 # > <@discordbridge:something.org> [discord user]
                 message = message.replace(f"<{config['username']}>", "", 1)
         except KeyError:

@@ -49,11 +49,6 @@ class Gateway(object):
 
     async def heartbeat_handler(self, interval_ms: int) -> None:
         while True:
-            if not self.websocket or self.websocket.closed:
-                self.logger.info("Websocket closed, not sending heartbeat.")
-                await asyncio.sleep(0.25)  # Don't spam.
-                continue
-
             await asyncio.sleep(interval_ms / 1000)
             await self.websocket.send(json.dumps(self.Payloads.HEARTBEAT()))
 

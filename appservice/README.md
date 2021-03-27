@@ -54,6 +54,7 @@ This bridge is written with:
 * `urllib3`: Sending requests, thread safety.
 * `websockets`: Connecting to Discord. (Big thanks to an anonymous person "nesslersreagent" for figuring out the initial connection mess.)
 
+## NOTES
 * A basic sqlite database is used for keeping track of bridged rooms.
 
 * Logs are saved to the `appservice.log` file in `$PWD` or the specified directory.

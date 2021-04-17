@@ -3,7 +3,7 @@
 A simple bridge between Matrix and Discord written in Python.
 
 This repository contains two bridges:
-* A [puppeting appservice](https://github.com/git-bruh/matrix-discord-bridge/tree/appservice/appservice) (experimental-ish): The puppeting bridge written with minimal dependencies. Running this requires a self-hosted homeserver.
+* A [puppeting appservice](appservice) (experimental-ish): The puppeting bridge written with minimal dependencies. Running this requires a self-hosted homeserver.
 
 * A [non-puppeting bridge](bridge): The non-puppeting bridge written with `matrix-nio` and `discord.py`, most people would want to use this one.
 

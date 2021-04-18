@@ -23,7 +23,6 @@ class AppService(bottle.Bottle):
         self.http = http
         self.logger = logging.getLogger("appservice")
 
-        # TODO better method.
         # Map events to functions.
         self.mapping = {
             "m.room.member": "on_member",

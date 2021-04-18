@@ -30,9 +30,6 @@ class MatrixClient(AppService):
         self.emote_cache: Dict[str, str] = {}
         self.format = "_discord_"  # "{@,#}_discord_1234:localhost"
 
-    def to_return(self, event: matrix.Event) -> bool:
-        return event.sender.startswith(("@_discord", self.user_id))
-
     def handle_bridge(self, message: matrix.Event) -> None:
         # Ignore events that aren't for us.
         if message.sender.split(":")[
@@ -77,7 +74,10 @@ class MatrixClient(AppService):
         self.join_room(event.room_id)
 
     def on_message(self, message: matrix.Event) -> None:
-        if self.to_return(message):
+        if (
+            message.sender.startswith((f"@{self.format}", self.user_id))
+            or not message.body
+        ):
             return
 
         # Handle bridging commands.
@@ -106,9 +106,6 @@ class MatrixClient(AppService):
             )
 
         else:
-            if not message.body:
-                return
-
             message.body = self.process_message(channel_id, message.body)
             message_cache[message.event_id] = {
                 "message_id": self.discord.send_webhook(
@@ -428,6 +425,7 @@ class DiscordClient(Gateway):
     def to_return(self, message: discord.Message) -> bool:
         return (
             message.channel_id not in self.app.db.list_channels()
+            or not message.content
             or not message.author
             or message.author.discriminator == "0000"
         )

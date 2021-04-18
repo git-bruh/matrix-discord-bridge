@@ -33,8 +33,11 @@ class Gateway(object):
         while True:
             try:
                 await self.gateway_handler(self.get_gateway_url())
-            except websockets.ConnectionClosedError:
-                # TODO reconnect ?
+            except (
+                websockets.ConnectionClosedError,
+                websockets.InvalidMessage,
+            ):
+                # TODO reconnect
                 self.logger.exception("Quitting, connection lost.")
                 break
 
@@ -63,9 +66,6 @@ class Gateway(object):
         self.query_ev.set()
 
     def handle_otype(self, data: dict, otype: str) -> None:
-        if data.get("embeds"):
-            return  # TODO embeds
-
         if otype == "MESSAGE_CREATE" or otype == "MESSAGE_UPDATE":
             obj = discord.Message(data)
         elif otype == "MESSAGE_DELETE":
@@ -192,6 +192,8 @@ class Gateway(object):
         await self.websocket.send(
             json.dumps(self.Payloads.QUERY(guild_id, name))
         )
+
+        # TODO clean this mess.
 
         # Wait for our websocket to receive the chunk.
         await asyncio.wait_for(self.query_ev.wait(), timeout=5)

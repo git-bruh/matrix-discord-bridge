@@ -107,26 +107,15 @@ class DataBase(object):
 
         return [channel["channel_id"] for channel in channels]
 
-    def list_users(self) -> List[dict]:
+    def fetch_user(self, mxid: str) -> dict:
         """
-        Get a dictionary of all the puppeted users.
+        Fetch the profile for a bridged user.
         """
 
         with self.lock:
             self.cur.execute("SELECT * FROM users")
-
             users = self.cur.fetchall()
 
-        return users
+        user = [user for user in users if user["mxid"] == mxid]
 
-    def query_user(self, mxid: str) -> bool:
-        """
-        Check whether a puppet user has already been created for a given mxid.
-        """
-
-        with self.lock:
-            self.cur.execute("SELECT mxid FROM users")
-
-            users = self.cur.fetchall()
-
-        return next((True for user in users if user["mxid"] == mxid), False)
+        return user[0] if user else {}

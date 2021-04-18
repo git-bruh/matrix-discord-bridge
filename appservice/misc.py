@@ -87,3 +87,17 @@ def except_deleted(fn):
                 raise
 
     return wrapper
+
+
+def hash_str(string: str) -> int:
+    """
+    Create the hash for a string (poorly).
+    """
+
+    hashed = 0
+    results = map(ord, string)
+
+    for result in results:
+        hashed += result
+
+    return hashed

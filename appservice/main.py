@@ -91,7 +91,6 @@ class MatrixClient(AppService):
         webhook = self.discord.get_webhook(channel_id, "matrix_bridge")
 
         if message.relates_to and message.reltype == "m.replace":
-
             relation = message_cache.get(message.relates_to)
 
             if not message.new_body or not relation:
@@ -106,7 +105,12 @@ class MatrixClient(AppService):
             )
 
         else:
-            message.body = self.process_message(channel_id, message.body)
+            message.body = (
+                f"`{message.body}`: {self.mxc_url(message.attachment)}"
+                if message.attachment
+                else self.process_message(channel_id, message.body)
+            )
+
             message_cache[message.event_id] = {
                 "message_id": self.discord.send_webhook(
                     webhook,
@@ -362,8 +366,6 @@ class DiscordClient(Gateway):
                 )
 
         def sync_users(guilds: set):
-            users = []
-
             for guild in guilds:
                 [
                     self.sync_profile(user, self.matrixify(user.id, user=True))

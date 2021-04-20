@@ -8,7 +8,7 @@ import bottle
 import urllib3
 
 import matrix
-from misc import dict_cls, log_except, request
+from misc import dict_cls, except_deleted, log_except, request
 
 
 class AppService(bottle.Bottle):
@@ -83,7 +83,20 @@ class AppService(bottle.Bottle):
 
         return {}
 
+    def mxc_url(self, mxc: str) -> str:
+        try:
+            homeserver, media_id = mxc.replace("mxc://", "").split("/")
+            converted = (
+                f"https://{self.server_name}/_matrix/media/r0/download/"
+                f"{homeserver}/{media_id}"
+            )
+        except ValueError:
+            converted = ""
+
+        return converted
+
     def get_event_object(self, event: dict) -> matrix.Event:
+        # TODO use caching and invalidate old cache on member events.
         event["author"] = dict_cls(
             self.get_profile(event["sender"]), matrix.User
         )
@@ -105,18 +118,16 @@ class AppService(bottle.Bottle):
         )
 
     def get_profile(self, mxid: str) -> dict:
-        # TODO handle failure, avoid querying this endpoint repeatedly.
-        resp = self.send("GET", f"/profile/{mxid}")
+        resp = except_deleted(self.send)("GET", f"/profile/{mxid}")
 
-        avatar_url = resp.get("avatar_url", "")[6:].split("/")
-        avatar_url = (
-            (
-                f"https://{self.server_name}/_matrix/media/r0/download/"
-                f"{avatar_url[0]}/{avatar_url[1]}"
-            )
-            if len(avatar_url) > 1
-            else None
-        )
+        # No profile exists for the user.
+        if not resp:
+            return {}
+
+        avatar_url = resp.get("avatar_url")
+
+        if avatar_url:
+            avatar_url = self.mxc_url(avatar_url)
 
         return {
             "avatar_url": avatar_url,

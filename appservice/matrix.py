@@ -3,14 +3,15 @@ from dataclasses import dataclass
 
 @dataclass
 class User(object):
-    avatar_url: str
-    displayname: str
+    avatar_url: str = ""
+    displayname: str = ""
 
 
 class Event(object):
     def __init__(self, event: dict):
         content = event["content"]
 
+        self.attachment = content.get("url")
         self.author = event["author"]
         self.body = content.get("body", "")
         self.event_id = event["event_id"]

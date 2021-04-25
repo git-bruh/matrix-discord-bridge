@@ -397,7 +397,6 @@ class DiscordClient(Gateway):
     def to_return(self, message: discord.Message) -> bool:
         return (
             message.channel_id not in self.app.db.list_channels()
-            or not message.content
             or not message.author  # Embeds can be weird sometimes.
             or message.webhook_id
             in [hook.id for hook in self.webhook_cache.values()]

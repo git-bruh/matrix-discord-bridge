@@ -13,7 +13,7 @@ class Event(object):
 
         self.attachment = content.get("url")
         self.author = event["author"]
-        self.body = content.get("body", "")
+        self.body = content.get("body", "").strip()
         self.event_id = event["event_id"]
         self.is_direct = content.get("is_direct", False)
         self.room_id = event["room_id"]

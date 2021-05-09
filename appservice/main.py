@@ -5,20 +5,18 @@ import os
 import re
 import sys
 import threading
-from typing import Dict, Tuple, Union
+from typing import Dict, List, Tuple
 
 import urllib3
 
 import discord
 import matrix
 from appservice import AppService
+from cache import Cache
 from db import DataBase
 from errors import RequestError
 from gateway import Gateway
 from misc import dict_cls, except_deleted, hash_str
-
-# TODO should this be cleared periodically ?
-message_cache: Dict[str, Union[discord.Webhook, str]] = {}
 
 
 class MatrixClient(AppService):
@@ -27,8 +25,10 @@ class MatrixClient(AppService):
 
         self.db = DataBase(config["database"])
         self.discord = DiscordClient(self, config, http)
-        self.emote_cache: Dict[str, str] = {}
         self.format = "_discord_"  # "{@,#}_discord_1234:localhost"
+
+        for k in ("m_emotes", "m_members", "m_messages"):
+            Cache.cache[k] = {}
 
     def handle_bridge(self, message: matrix.Event) -> None:
         # Ignore events that aren't for us.
@@ -37,6 +37,7 @@ class MatrixClient(AppService):
         ] != self.server_name or not message.body.startswith("!bridge"):
             return
 
+        # Get the channel ID.
         try:
             channel = message.body.split()[1]
         except IndexError:
@@ -46,7 +47,7 @@ class MatrixClient(AppService):
         try:
             channel = self.discord.get_channel(channel)
         except RequestError as e:
-            # The channel can be invalid or we may not have permission.
+            # The channel can be invalid or we may not have permissions.
             self.logger.warning(f"Failed to fetch channel {channel}: {e}")
             return
 
@@ -61,7 +62,15 @@ class MatrixClient(AppService):
         self.create_room(channel, message.sender)
 
     def on_member(self, event: matrix.Event) -> None:
-        # Ignore events that aren't for us.
+        with Cache.lock:
+            # Just lazily clear the whole member cache on
+            # membership update events.
+            if event.room_id in Cache.cache["m_members"]:
+                self.logger.info(
+                    f"Clearing member cache for room '{event.room_id}'."
+                )
+                del Cache.cache["m_members"][event.room_id]
+
         if (
             event.sender.split(":")[-1] != self.server_name
             or event.state_key != self.user_id
@@ -70,7 +79,7 @@ class MatrixClient(AppService):
             return
 
         # Join the direct message room.
-        self.logger.info(f"Joining direct message room {event.room_id}.")
+        self.logger.info(f"Joining direct message room '{event.room_id}'.")
         self.join_room(event.room_id)
 
     def on_message(self, message: matrix.Event) -> None:
@@ -88,51 +97,78 @@ class MatrixClient(AppService):
         if not channel_id:
             return
 
-        webhook = self.discord.get_webhook(channel_id, "matrix_bridge")
+        author = self.get_members(message.room_id)[message.sender]
+
+        if not author.display_name:
+            author.display_name = message.sender
+
+        webhook = self.discord.get_webhook(
+            channel_id, self.discord.webhook_name
+        )
 
         if message.relates_to and message.reltype == "m.replace":
-            relation = message_cache.get(message.relates_to)
+            with Cache.lock:
+                message_id = Cache.cache["m_messages"].get(message.relates_to)
 
-            if not message.new_body or not relation:
+            if not message_id or not message.new_body:
                 return
 
-            message.new_body = self.process_message(
-                channel_id, message.new_body
-            )
+            message.new_body = self.process_message(message)
 
             except_deleted(self.discord.edit_webhook)(
-                message.new_body, relation["message_id"], webhook
+                message.new_body, message_id, webhook
             )
-
         else:
             message.body = (
                 f"`{message.body}`: {self.mxc_url(message.attachment)}"
                 if message.attachment
-                else self.process_message(channel_id, message.body)
+                else self.process_message(message)
             )
 
-            message_cache[message.event_id] = {
-                "message_id": self.discord.send_webhook(
-                    webhook,
-                    avatar_url=message.author.avatar_url,
-                    content=message.body,
-                    username=message.author.displayname,
-                ),
-                "webhook": webhook,
-            }
+            message_id = self.discord.send_webhook(
+                webhook,
+                self.mxc_url(author.avatar_url),
+                message.body,
+                author.display_name,
+            ).id
 
-    @except_deleted
-    def on_redaction(self, event: dict) -> None:
-        redacts = event["redacts"]
+            with Cache.lock:
+                Cache.cache["m_messages"][message.id] = message_id
 
-        event = message_cache.get(redacts)
+    def on_redaction(self, event: matrix.Event) -> None:
+        with Cache.lock:
+            message_id = Cache.cache["m_messages"].get(event.redacts)
 
-        if not event:
+        if not message_id:
             return
 
-        self.discord.delete_webhook(event["message_id"], event["webhook"])
+        webhook = self.discord.get_webhook(
+            self.db.get_channel(event.room_id), self.discord.webhook_name
+        )
 
-        message_cache.pop(redacts)
+        except_deleted(self.discord.delete_webhook)(message_id, webhook)
+
+        with Cache.lock:
+            del Cache.cache["m_messages"][event.redacts]
+
+    def get_members(self, room_id: str) -> Dict[str, matrix.User]:
+        with Cache.lock:
+            cached = Cache.cache["m_members"].get(room_id)
+
+        if cached:
+            return cached
+
+        resp = self.send("GET", f"/rooms/{room_id}/joined_members")
+
+        joined = resp["joined"]
+
+        for k, v in joined.items():
+            joined[k] = dict_cls(v, matrix.User)
+
+        with Cache.lock:
+            Cache.cache["m_members"][room_id] = joined
+
+        return joined
 
     def create_room(self, channel: discord.Channel, sender: str) -> None:
         """
@@ -164,7 +200,11 @@ class MatrixClient(AppService):
         self.db.add_room(resp["room_id"], channel.id)
 
     def create_message_event(
-        self, message: str, emotes: dict, edit: str = "", reply: str = ""
+        self,
+        message: str,
+        emotes: dict,
+        edit: str = "",
+        reference: discord.MessageReference = None,
     ) -> dict:
         content = {
             "body": message,
@@ -173,20 +213,39 @@ class MatrixClient(AppService):
             "formatted_body": self.get_fmt(message, emotes),
         }
 
-        event = message_cache.get(reply)
+        if reference:
+            # Reply to a Discord message.
+            with Cache.lock:
+                event_id = Cache.cache["d_messages"].get(reference.message_id)
 
-        if event:
-            content = {
-                **content,
-                "m.relates_to": {
-                    "m.in_reply_to": {"event_id": event["event_id"]}
-                },
-                "formatted_body": f"""<mx-reply><blockquote>\
-<a href='https://matrix.to/#/{event["room_id"]}/{event["event_id"]}'>\
-In reply to</a><a href='https://matrix.to/#/{event["mxid"]}'>\
-{event["mxid"]}</a><br>{event["body"]}</blockquote></mx-reply>\
+            # Reply to a Matrix message. (maybe)
+            if not event_id:
+                with Cache.lock:
+                    event_id = [
+                        k
+                        for k, v in Cache.cache["m_messages"].items()
+                        if v == reference.message_id
+                    ]
+                    event_id = next(iter(event_id), "")
+
+        if reference and event_id:
+            event = except_deleted(self.get_event)(
+                event_id,
+                self.get_room_id(self.discord.matrixify(reference.channel_id)),
+            )
+            if event:
+                content = {
+                    **content,
+                    "body": (
+                        f"> <{event.sender}> {event.body}\n{content['body']}"
+                    ),
+                    "m.relates_to": {"m.in_reply_to": {"event_id": event.id}},
+                    "formatted_body": f"""<mx-reply><blockquote>\
+<a href='https://matrix.to/#/{event.room_id}/{event.id}'>\
+In reply to</a><a href='https://matrix.to/#/{event.sender}'>\
+{event.sender}</a><br>{event.formatted_body}</blockquote></mx-reply>\
 {content["formatted_body"]}""",
-            }
+                }
 
         if edit:
             content = {
@@ -227,63 +286,67 @@ In reply to</a><a href='https://matrix.to/#/{event["mxid"]}'>\
             for emote in emotes
         ]
 
-        [thread.start() for thread in upload_threads]
-        [thread.join() for thread in upload_threads]
+        # Acquire the lock before starting the threads to avoid resource
+        # contention by tens of threads at once.
+        with Cache.lock:
+            for thread in upload_threads:
+                thread.start()
+            for thread in upload_threads:
+                thread.join()
 
-        for emote in emotes:
-            emote_ = self.emote_cache.get(emote)
+        with Cache.lock:
+            for emote in emotes:
+                emote_ = Cache.cache["m_emotes"].get(emote)
 
-            if emote_:
-                emote = f":{emote}:"
-                message = message.replace(
-                    emote,
-                    f"""<img alt=\"{emote}\" title=\"{emote}\" \
+                if emote_:
+                    emote = f":{emote}:"
+                    message = message.replace(
+                        emote,
+                        f"""<img alt=\"{emote}\" title=\"{emote}\" \
 height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
-                )
+                    )
 
         return message
 
-    def process_message(self, channel_id: str, message: str) -> str:
+    def process_message(self, event: matrix.Event) -> str:
+        message = event.new_body if event.new_body else event.body
+
         message = message[:2000]  # Discord limit.
 
+        id_regex = f"[0-9]{{{discord.ID_LEN}}}"
+
         emotes = re.findall(r":(\w*):", message)
-        mentions = re.findall(r"(@(\w*))", message)
+        mentions = re.findall(
+            f"@{self.format}{id_regex}:{re.escape(self.server_name)}",
+            event.formatted_body,
+        )
 
-        # Remove the puppet user's username from replies.
-        message = re.sub(f"<@{self.format}.+?>", "", message)
-
-        added_emotes = []
-        for emote in emotes:
-            # Don't replace emote names with IDs multiple times.
-            if emote not in added_emotes:
-                added_emotes.append(emote)
-                emote_ = self.discord.emote_cache.get(emote)
+        with Cache.lock:
+            for emote in set(emotes):
+                emote_ = Cache.cache["d_emotes"].get(emote)
                 if emote_:
                     message = message.replace(f":{emote}:", emote_)
 
-        # Don't unnecessarily fetch the channel.
-        if mentions:
-            guild_id = self.discord.get_channel(channel_id).guild_id
+        for mention in set(mentions):
+            username = self.db.fetch_user(mention).get("username")
+            if username:
+                match = re.search(id_regex, mention)
 
-        # TODO this can block for too long if a long list is to be fetched.
-        for mention in mentions:
-            if not mention[1]:
-                continue
-
-            try:
-                member = self.discord.query_member(guild_id, mention[1])
-            except (asyncio.TimeoutError, RuntimeError):
-                continue
-
-            if member:
-                message = message.replace(mention[0], member.mention)
+                if match:
+                    # Replace the 'mention' so that the user is tagged
+                    # in the case of replies aswell.
+                    # '> <@_discord_1234:localhost> Message'
+                    for replace in (mention, username):
+                        message = message.replace(
+                            replace, f"<@{match.group()}>"
+                        )
 
         return message
 
     def upload_emote(self, emote_name: str, emote_id: str) -> None:
         # There won't be a race condition here, since only a unique
         # set of emotes are uploaded at a time.
-        if emote_name in self.emote_cache:
+        if emote_name in Cache.cache["m_emotes"]:
             return
 
         emote_url = f"{discord.CDN_URL}/emojis/{emote_id}"
@@ -291,7 +354,8 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
         # We don't want the message to be dropped entirely if an emote
         # fails to upload for some reason.
         try:
-            self.emote_cache[emote_name] = self.upload(emote_url)
+            # TODO This is not thread safe, but we're protected by the GIL.
+            Cache.cache["m_emotes"][emote_name] = self.upload(emote_url)
         except RequestError as e:
             self.logger.warning(f"Failed to upload emote {emote_id}: {e}")
 
@@ -340,66 +404,19 @@ class DiscordClient(Gateway):
         super().__init__(http, config["discord_token"])
 
         self.app = appservice
-        self.emote_cache: Dict[str, str] = {}
-        self.webhook_cache: Dict[str, discord.Webhook] = {}
+        self.webhook_name = "matrix_bridge"
 
-    async def sync(self) -> None:
-        """
-        Periodically compare the usernames and avatar URLs with Discord
-        and update if they differ. Also synchronise emotes.
-        """
-
-        # TODO use websocket events and requests.
-
-        def sync_emotes(guilds: set):
-            emotes = []
-
-            for guild in guilds:
-                [emotes.append(emote) for emote in (self.get_emotes(guild))]
-
-            self.emote_cache.clear()  # Clear deleted/renamed emotes.
-
-            for emote in emotes:
-                self.emote_cache[f"{emote.name}"] = (
-                    f"<{'a' if emote.animated else ''}:"
-                    f"{emote.name}:{emote.id}>"
-                )
-
-        def sync_users(guilds: set):
-            for guild in guilds:
-                [
-                    self.sync_profile(user, self.matrixify(user.id, user=True))
-                    for user in self.get_members(guild)
-                ]
-
-        while True:
-            guilds = set()  # Avoid duplicates.
-
-            try:
-                for channel in self.app.db.list_channels():
-                    guilds.add(self.get_channel(channel).guild_id)
-
-                sync_emotes(guilds)
-                sync_users(guilds)
-            # Don't let the background task die.
-            except RequestError:
-                self.logger.exception(
-                    "Ignoring exception during background sync:"
-                )
-
-            await asyncio.sleep(120)  # Check every 2 minutes.
-
-    async def start(self) -> None:
-        asyncio.ensure_future(self.sync())
-
-        await self.run()
+        for k in ("d_emotes", "d_messages", "d_webhooks"):
+            Cache.cache[k] = {}
 
     def to_return(self, message: discord.Message) -> bool:
+        with Cache.lock:
+            hook_ids = [hook.id for hook in Cache.cache["d_webhooks"].values()]
+
         return (
             message.channel_id not in self.app.db.list_channels()
             or not message.author  # Embeds can be weird sometimes.
-            or message.webhook_id
-            in [hook.id for hook in self.webhook_cache.values()]
+            or message.webhook_id in hook_ids
         )
 
     def matrixify(self, id: str, user: bool = False) -> str:
@@ -408,10 +425,12 @@ class DiscordClient(Gateway):
             f"{self.app.server_name}"
         )
 
-    def sync_profile(self, user: discord.User, mxid: str) -> None:
+    def sync_profile(self, user: discord.User) -> None:
         """
         Sync the avatar and username for a puppeted user.
         """
+
+        mxid = self.matrixify(user.id, user=True)
 
         profile = self.app.db.fetch_user(mxid)
 
@@ -422,10 +441,10 @@ class DiscordClient(Gateway):
         username = f"{user.username}#{user.discriminator}"
 
         if user.avatar_url != profile["avatar_url"]:
-            self.logger.info(f"Updating avatar for Discord user {user.id}")
+            self.logger.info(f"Updating avatar for Discord user '{user.id}'")
             self.app.set_avatar(user.avatar_url, mxid)
         if username != profile["username"]:
-            self.logger.info(f"Updating username for Discord user {user.id}")
+            self.logger.info(f"Updating username for Discord user '{user.id}'")
             self.app.set_nick(username, mxid)
 
     def wrap(self, message: discord.Message) -> Tuple[str, str]:
@@ -457,16 +476,41 @@ class DiscordClient(Gateway):
                 self.app.set_avatar(message.author.avatar_url, mxid)
 
         if mxid not in self.app.get_members(room_id):
-            self.logger.info(f"Inviting user {mxid} to room {room_id}.")
+            self.logger.info(f"Inviting user '{mxid}' to room '{room_id}'.")
 
             self.app.send_invite(room_id, mxid)
             self.app.join_room(room_id, mxid)
 
         if message.webhook_id:
             # Sync webhooks here as they can't be accessed like guild members.
-            self.sync_profile(message.author, mxid)
+            self.sync_profile(message.author)
 
         return mxid, room_id
+
+    def cache_emotes(self, emotes: List[discord.Emote]):
+        # TODO maybe "namespace" emotes by guild in the cache ?
+        with Cache.lock:
+            for emote in emotes:
+                Cache.cache["d_emotes"][emote.name] = (
+                    f"<{'a' if emote.animated else ''}:"
+                    f"{emote.name}:{emote.id}>"
+                )
+
+    def on_guild_create(self, guild: discord.Guild) -> None:
+        for member in guild.members:
+            self.sync_profile(member)
+
+        self.cache_emotes(guild.emojis)
+
+    def on_guild_emojis_update(
+        self, update: discord.GuildEmojisUpdate
+    ) -> None:
+        self.cache_emotes(update.emojis)
+
+    def on_guild_member_update(
+        self, update: discord.GuildMemberUpdate
+    ) -> None:
+        self.sync_profile(update.user)
 
     def on_message_create(self, message: discord.Message) -> None:
         if self.to_return(message):
@@ -474,45 +518,53 @@ class DiscordClient(Gateway):
 
         mxid, room_id = self.wrap(message)
 
-        content, emotes = self.process_message(message)
+        content_, emotes = self.process_message(message)
 
         content = self.app.create_message_event(
-            content, emotes, reply=message.reference
+            content_, emotes, reference=message.reference
         )
 
-        message_cache[message.id] = {
-            "body": content["body"],
-            "event_id": self.app.send_message(room_id, content, mxid),
-            "mxid": mxid,
-            "room_id": room_id,
-        }
+        with Cache.lock:
+            Cache.cache["d_messages"][message.id] = self.app.send_message(
+                room_id, content, mxid
+            )
 
-    def on_message_delete(self, message: discord.DeletedMessage) -> None:
-        event = message_cache.get(message.id)
+    def on_message_delete(self, message: discord.Message) -> None:
+        with Cache.lock:
+            event_id = Cache.cache["d_messages"].get(message.id)
 
-        if not event:
+        if not event_id:
             return
 
-        self.app.redact(event["event_id"], event["room_id"], event["mxid"])
+        room_id = self.app.get_room_id(self.matrixify(message.channel_id))
+        event = except_deleted(self.app.get_event)(event_id, room_id)
 
-        message_cache.pop(message.id)
+        if event:
+            self.app.redact(event.id, event.room_id, event.sender)
+
+        with Cache.lock:
+            del Cache.cache["d_messages"][message.id]
 
     def on_message_update(self, message: discord.Message) -> None:
         if self.to_return(message):
             return
 
-        event = message_cache.get(message.id)
+        with Cache.lock:
+            event_id = Cache.cache["d_messages"].get(message.id)
 
-        if not event:
+        if not event_id:
             return
 
-        content, emotes = self.process_message(message)
+        room_id = self.app.get_room_id(self.matrixify(message.channel_id))
+        mxid = self.matrixify(message.author.id, user=True)
+
+        content_, emotes = self.process_message(message)
 
         content = self.app.create_message_event(
-            content, emotes, edit=event["event_id"]
+            content_, emotes, edit=event_id
         )
 
-        self.app.send_message(event["room_id"], content, event["mxid"])
+        self.app.send_message(room_id, content, mxid)
 
     def on_typing_start(self, typing: discord.Typing) -> None:
         if typing.channel_id not in self.app.db.list_channels():
@@ -533,7 +585,8 @@ class DiscordClient(Gateway):
         """
 
         # Check the cache first.
-        webhook = self.webhook_cache.get(channel_id)
+        with Cache.lock:
+            webhook = Cache.cache["d_webhooks"].get(channel_id)
 
         if webhook:
             return webhook
@@ -551,24 +604,26 @@ class DiscordClient(Gateway):
         if not webhook:
             webhook = self.create_webhook(channel_id, name)
 
-        self.webhook_cache[channel_id] = webhook
+        with Cache.lock:
+            Cache.cache["d_webhooks"][channel_id] = webhook
 
         return webhook
 
-    def process_message(self, message: discord.Message) -> Tuple[str, str]:
+    def process_message(self, message: discord.Message) -> Tuple[str, Dict]:
         content = message.content
         emotes = {}
         regex = r"<a?:(\w+):(\d+)>"
 
         # Mentions can either be in the form of `<@1234>` or `<@!1234>`.
-        for char in ("", "!"):
-            for member in message.mentions:
+        for member in message.mentions:
+            for char in ("", "!"):
                 content = content.replace(
                     f"<@{char}{member.id}>", f"@{member.username}"
                 )
 
         # `except_deleted` for invalid channels.
-        for channel in re.findall(r"<#([0-9]+)>", content):
+        # TODO can this block for too long ?
+        for channel in re.findall(r"<#([0-9]{{{discord.ID_LEN}}})>", content):
             channel_ = except_deleted(self.get_channel)(channel)
             content = content.replace(
                 f"<#{channel}>",
@@ -613,6 +668,16 @@ def config_gen(basedir: str, config_file: str) -> dict:
         return json.loads(f.read())
 
 
+def excepthook(exc_type, exc_value, exc_traceback):
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+        return
+
+    logging.critical(
+        "Unknown exception:", exc_info=(exc_type, exc_value, exc_traceback)
+    )
+
+
 def main() -> None:
     try:
         basedir = sys.argv[1]
@@ -634,9 +699,9 @@ def main() -> None:
         ],
     )
 
-    http = urllib3.PoolManager(maxsize=10)
+    sys.excepthook = excepthook
 
-    app = MatrixClient(config, http)
+    app = MatrixClient(config, urllib3.PoolManager(maxsize=10))
 
     # Start the bottle app in a separate thread.
     app_thread = threading.Thread(
@@ -645,7 +710,7 @@ def main() -> None:
     app_thread.start()
 
     try:
-        asyncio.run(app.discord.start())
+        asyncio.run(app.discord.run())
     except KeyboardInterrupt:
         sys.exit()
 

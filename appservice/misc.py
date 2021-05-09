@@ -1,4 +1,3 @@
-import asyncio
 import json
 from dataclasses import fields
 from typing import Any
@@ -8,13 +7,13 @@ import urllib3
 from errors import RequestError
 
 
-def dict_cls(dict_var: dict, cls: Any) -> Any:
+def dict_cls(d: dict, cls: Any) -> Any:
     """
     Create a dataclass from a dictionary.
     """
 
     field_names = set(f.name for f in fields(cls))
-    filtered_dict = {k: v for k, v in dict_var.items() if k in field_names}
+    filtered_dict = {k: v for k, v in d.items() if k in field_names}
 
     return cls(**filtered_dict)
 
@@ -30,22 +29,6 @@ def log_except(fn):
         except Exception:
             self.logger.exception(f"Exception in '{fn.__name__}':")
             raise
-
-    return wrapper
-
-
-def wrap_async(fn):
-    """
-    Call an asynchronous function from a synchronous one.
-    """
-
-    def wrapper(self, *args, **kwargs):
-        if not self.loop:
-            raise RuntimeError("loop is None.")
-
-        return asyncio.run_coroutine_threadsafe(
-            fn(self, *args, **kwargs), loop=self.loop
-        ).result()
 
     return wrapper
 
@@ -75,8 +58,7 @@ def request(fn):
 
 def except_deleted(fn):
     """
-    Ignore the `RequestError` on 404s, the message might have been
-    deleted by someone else already.
+    Ignore the `RequestError` on 404s, the content might have been removed.
     """
 
     def wrapper(*args, **kwargs):

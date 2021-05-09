@@ -4,11 +4,11 @@ import threading
 from typing import List
 
 
-class DataBase(object):
+class DataBase:
     def __init__(self, db_file) -> None:
         self.create(db_file)
 
-        # The database is accessed via both the threads.
+        # The database is accessed via multiple threads.
         self.lock = threading.Lock()
 
     def create(self, db_file) -> None:
@@ -92,7 +92,7 @@ class DataBase(object):
 
             room = self.cur.fetchone()
 
-        # Return an empty string if nothing is bridged.
+        # Return an empty string if the channel is not bridged.
         return "" if not room else room["channel_id"]
 
     def list_channels(self) -> List[str]:
@@ -116,6 +116,8 @@ class DataBase(object):
             self.cur.execute("SELECT * FROM users")
             users = self.cur.fetchall()
 
-        user = [user for user in users if user["mxid"] == mxid]
+        user: dict = next(
+            iter([user for user in users if user["mxid"] == mxid]), {}
+        )
 
-        return user[0] if user else {}
+        return user

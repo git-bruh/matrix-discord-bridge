@@ -2,13 +2,14 @@ import json
 import logging
 import urllib.parse
 import uuid
-from typing import List, Union
+from typing import Union
 
 import bottle
 import urllib3
 
 import matrix
-from misc import dict_cls, except_deleted, log_except, request
+from cache import Cache
+from misc import log_except, request
 
 
 class AppService(bottle.Bottle):
@@ -37,13 +38,17 @@ class AppService(bottle.Bottle):
             method="PUT",
         )
 
+        Cache.cache["m_rooms"] = {}
+
     def handle_event(self, event: dict) -> None:
         event_type = event.get("type")
 
-        if event_type == "m.room.member" or event_type == "m.room.message":
-            obj = self.get_event_object(event)
-        elif event_type == "m.room.redaction":
-            obj = event
+        if event_type in (
+            "m.room.member",
+            "m.room.message",
+            "m.room.redaction",
+        ):
+            obj = matrix.Event(event)
         else:
             self.logger.info(f"Unknown event type: {event_type}")
             return
@@ -86,22 +91,13 @@ class AppService(bottle.Bottle):
     def mxc_url(self, mxc: str) -> str:
         try:
             homeserver, media_id = mxc.replace("mxc://", "").split("/")
-            converted = (
-                f"https://{self.server_name}/_matrix/media/r0/download/"
-                f"{homeserver}/{media_id}"
-            )
         except ValueError:
-            converted = ""
+            return ""
 
-        return converted
-
-    def get_event_object(self, event: dict) -> matrix.Event:
-        # TODO use caching and invalidate old cache on member events.
-        event["author"] = dict_cls(
-            self.get_profile(event["sender"]), matrix.User
+        return (
+            f"https://{self.server_name}/_matrix/media/r0/download/"
+            f"{homeserver}/{media_id}"
         )
-
-        return matrix.Event(event)
 
     def join_room(self, room_id: str, mxid: str = "") -> None:
         self.send(
@@ -117,42 +113,25 @@ class AppService(bottle.Bottle):
             params={"user_id": mxid} if mxid else {},
         )
 
-    def get_profile(self, mxid: str) -> dict:
-        resp = except_deleted(self.send)("GET", f"/profile/{mxid}")
-
-        # No profile exists for the user.
-        if not resp:
-            return {}
-
-        avatar_url = resp.get("avatar_url")
-
-        if avatar_url:
-            avatar_url = self.mxc_url(avatar_url)
-
-        return {
-            "avatar_url": avatar_url,
-            "displayname": resp.get("displayname"),
-        }
-
-    def get_members(self, room_id: str) -> List[str]:
-        resp = self.send(
-            "GET",
-            f"/rooms/{room_id}/members",
-            params={"membership": "join", "not_membership": "leave"},
-        )
-
-        return [
-            content["sender"]
-            for content in resp["chunk"]
-            if content["content"]["membership"] == "join"
-        ]
-
     def get_room_id(self, alias: str) -> str:
+        with Cache.lock:
+            room = Cache.cache["m_rooms"].get(alias)
+        if room:
+            return room
+
         resp = self.send("GET", f"/directory/room/{urllib.parse.quote(alias)}")
 
-        # TODO cache ?
+        room_id = resp["room_id"]
 
-        return resp["room_id"]
+        with Cache.lock:
+            Cache.cache["m_rooms"][alias] = room_id
+
+        return room_id
+
+    def get_event(self, event_id: str, room_id: str) -> matrix.Event:
+        resp = self.send("GET", f"/rooms/{room_id}/event/{event_id}")
+
+        return matrix.Event(resp)
 
     def upload(self, url: str) -> str:
         """
@@ -211,12 +190,12 @@ class AppService(bottle.Bottle):
     ) -> dict:
         params["access_token"] = self.as_token
         headers = {"Content-Type": content_type}
-        content = json.dumps(content) if isinstance(content, dict) else content
+        payload = json.dumps(content) if isinstance(content, dict) else content
         endpoint = (
             f"{self.base_url}{endpoint}{path}?"
             f"{urllib.parse.urlencode(params)}"
         )
 
         return self.http.request(
-            method, endpoint, body=content, headers=headers
+            method, endpoint, body=payload, headers=headers
         )

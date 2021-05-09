@@ -8,31 +8,27 @@ import urllib3
 import websockets
 
 import discord
-from misc import dict_cls, log_except, request, wrap_async
+from misc import dict_cls, log_except, request
 
 
-class Gateway(object):
+class Gateway:
     def __init__(self, http: urllib3.PoolManager, token: str):
         self.http = http
         self.token = token
         self.logger = logging.getLogger("discord")
-        self.cdn_url = "https://cdn.discordapp.com"
         self.Payloads = discord.Payloads(self.token)
-        self.loop = self.websocket = None
-
-        self.query_cache = {}
+        self.websocket = None
 
     @log_except
     async def run(self) -> None:
-        self.loop = asyncio.get_running_loop()
-        self.query_ev = asyncio.Event()
-
-        self.heartbeat_task = None
+        self.heartbeat_task: asyncio.Future = None
         self.resume = False
+
+        gateway_url = self.get_gateway_url()
 
         while True:
             try:
-                await self.gateway_handler(self.get_gateway_url())
+                await self.gateway_handler(gateway_url)
             except (
                 websockets.ConnectionClosedError,
                 websockets.InvalidMessage,
@@ -55,26 +51,71 @@ class Gateway(object):
             await asyncio.sleep(interval_ms / 1000)
             await self.websocket.send(json.dumps(self.Payloads.HEARTBEAT()))
 
-    def query_handler(self, data: dict) -> None:
-        members = data["members"]
-        guild_id = data["guild_id"]
+    async def handle_resp(self, data: dict) -> None:
+        data_dict = data["d"]
 
-        for member in members:
-            user = member["user"]
-            self.query_cache[guild_id].append(user)
+        opcode = data["op"]
 
-        self.query_ev.set()
+        seq = data["s"]
+
+        if seq:
+            self.Payloads.seq = seq
+
+        if opcode == discord.GatewayOpCodes.DISPATCH:
+            otype = data["t"]
+
+            if otype == "READY":
+                self.Payloads.session = data_dict["session_id"]
+
+                self.logger.info("READY")
+            else:
+                self.handle_otype(data_dict, otype)
+        elif opcode == discord.GatewayOpCodes.HELLO:
+            heartbeat_interval = data_dict.get("heartbeat_interval")
+
+            self.logger.info(f"Heartbeat Interval: {heartbeat_interval}")
+
+            # Send periodic hearbeats to gateway.
+            self.heartbeat_task = asyncio.ensure_future(
+                self.heartbeat_handler(heartbeat_interval)
+            )
+
+            await self.websocket.send(
+                json.dumps(
+                    self.Payloads.RESUME()
+                    if self.resume
+                    else self.Payloads.IDENTIFY()
+                )
+            )
+        elif opcode == discord.GatewayOpCodes.RECONNECT:
+            self.logger.info("Received RECONNECT.")
+
+            self.resume = True
+            await self.websocket.close()
+        elif opcode == discord.GatewayOpCodes.INVALID_SESSION:
+            self.logger.info("Received INVALID_SESSION.")
+
+            self.resume = False
+            await self.websocket.close()
+        elif opcode == discord.GatewayOpCodes.HEARTBEAT_ACK:
+            # NOP
+            pass
+        else:
+            self.logger.info(
+                "Unknown OP code: {opcode}\n{json.dumps(data, indent=4)}"
+            )
 
     def handle_otype(self, data: dict, otype: str) -> None:
-        if otype == "MESSAGE_CREATE" or otype == "MESSAGE_UPDATE":
+        if otype in ("MESSAGE_CREATE", "MESSAGE_UPDATE", "MESSAGE_DELETE"):
             obj = discord.Message(data)
-        elif otype == "MESSAGE_DELETE":
-            obj = dict_cls(data, discord.DeletedMessage)
         elif otype == "TYPING_START":
             obj = dict_cls(data, discord.Typing)
-        elif otype == "GUILD_MEMBERS_CHUNK":
-            self.query_handler(data)
-            return
+        elif otype == "GUILD_CREATE":
+            obj = discord.Guild(data)
+        elif otype == "GUILD_MEMBER_UPDATE":
+            obj = discord.GuildMemberUpdate(data)
+        elif otype == "GUILD_EMOJIS_UPDATE":
+            obj = discord.GuildEmojisUpdate(data)
         else:
             self.logger.info(f"Unknown OTYPE: {otype}")
             return
@@ -90,119 +131,20 @@ class Gateway(object):
         try:
             func(obj)
         except Exception:
-            self.logger.exception(f"Ignoring exception in {func}:")
+            self.logger.exception(f"Ignoring exception in '{func.__name__}':")
 
     async def gateway_handler(self, gateway_url: str) -> None:
         async with websockets.connect(
             f"{gateway_url}/?v=8&encoding=json"
         ) as websocket:
             self.websocket = websocket
+
             async for message in websocket:
-                data = json.loads(message)
-                data_dict = data.get("d")
-
-                opcode = data.get("op")
-
-                seq = data.get("s")
-                if seq:
-                    self.Payloads.seq = seq
-
-                if opcode == discord.GatewayOpCodes.DISPATCH:
-                    otype = data.get("t")
-
-                    if otype == "READY":
-                        self.Payloads.session = data_dict["session_id"]
-
-                        self.logger.info("READY")
-
-                    else:
-                        self.handle_otype(data_dict, otype)
-
-                elif opcode == discord.GatewayOpCodes.HELLO:
-                    heartbeat_interval = data_dict.get("heartbeat_interval")
-
-                    self.logger.info(
-                        f"Heartbeat Interval: {heartbeat_interval}"
-                    )
-
-                    # Send periodic hearbeats to gateway.
-                    self.heartbeat_task = asyncio.ensure_future(
-                        self.heartbeat_handler(heartbeat_interval)
-                    )
-
-                    await websocket.send(
-                        json.dumps(
-                            self.Payloads.RESUME()
-                            if self.resume
-                            else self.Payloads.IDENTIFY()
-                        )
-                    )
-
-                elif opcode == discord.GatewayOpCodes.RECONNECT:
-                    self.logger.info("Received RECONNECT.")
-
-                    self.resume = True
-                    await websocket.close()
-
-                elif opcode == discord.GatewayOpCodes.INVALID_SESSION:
-                    self.logger.info("Received INVALID_SESSION.")
-
-                    self.resume = False
-                    await websocket.close()
-
-                elif opcode == discord.GatewayOpCodes.HEARTBEAT_ACK:
-                    # NOP
-                    pass
-
-                else:
-                    self.logger.info(
-                        f"Unknown OP code {opcode}:\n"
-                        f"{json.dumps(data, indent=4)}"
-                    )
-
-    @wrap_async
-    async def query_member(self, guild_id: str, name: str) -> discord.User:
-        """
-        Query the members for a given guild and return the first match.
-        """
-
-        self.query_ev.clear()
-
-        def query():
-            if not self.query_cache.get(guild_id):
-                self.query_cache[guild_id] = []
-
-            user = [
-                user
-                for user in self.query_cache[guild_id]
-                if name.lower() in user["username"].lower()
-            ]
-
-            return None if not user else discord.User(user[0])
-
-        user = query()
-
-        if user:
-            return user
-
-        if not self.websocket or self.websocket.closed:
-            self.logger.warning("Not fetching members, websocket closed.")
-            return
-
-        await self.websocket.send(
-            json.dumps(self.Payloads.QUERY(guild_id, name))
-        )
-
-        # TODO clean this mess.
-
-        # Wait for our websocket to receive the chunk.
-        await asyncio.wait_for(self.query_ev.wait(), timeout=5)
-
-        return query()
+                await self.handle_resp(json.loads(message))
 
     def get_channel(self, channel_id: str) -> discord.Channel:
         """
-        Get the channel object for a given channel ID.
+        Get the channel  for a given channel ID.
         """
 
         resp = self.send("GET", f"/channels/{channel_id}")
@@ -259,9 +201,17 @@ class Gateway(object):
             f"{message_id}",
         )
 
-    def send_webhook(self, webhook: discord.Webhook, **kwargs) -> str:
-        content = {
-            **kwargs,
+    def send_webhook(
+        self,
+        webhook: discord.Webhook,
+        avatar_url: str,
+        content: str,
+        username: str,
+    ) -> discord.Message:
+        payload = {
+            "avatar_url": avatar_url,
+            "content": content,
+            "username": username,
             # Disable 'everyone' and 'role' mentions.
             "allowed_mentions": {"parse": ["users"]},
         }
@@ -269,11 +219,11 @@ class Gateway(object):
         resp = self.send(
             "POST",
             f"/webhooks/{webhook.id}/{webhook.token}",
-            content,
+            payload,
             {"wait": True},
         )
 
-        return resp["id"]
+        return discord.Message(resp)
 
     def send_message(self, message: str, channel_id: str) -> None:
         self.send(
@@ -294,8 +244,8 @@ class Gateway(object):
         }
 
         # 'body' being an empty dict breaks "GET" requests.
-        content = json.dumps(content) if content else None
+        payload = json.dumps(content) if content else None
 
         return self.http.request(
-            method, endpoint, body=content, headers=headers
+            method, endpoint, body=payload, headers=headers
         )

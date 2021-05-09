@@ -1,10 +1,16 @@
 from dataclasses import dataclass
+from misc import dict_cls
 
 CDN_URL = "https://cdn.discordapp.com"
+ID_LEN = 18
+
+
+def bitmask(bit: int) -> int:
+    return 1 << bit
 
 
 @dataclass
-class Channel(object):
+class Channel:
     id: str
     type: str
     guild_id: str = ""
@@ -13,13 +19,32 @@ class Channel(object):
 
 
 @dataclass
-class Emote(object):
+class Emote:
     animated: bool
     id: str
     name: str
 
 
-class User(object):
+@dataclass
+class MessageReference:
+    message_id: str
+    channel_id: str
+    guild_id: str
+
+
+@dataclass
+class Typing:
+    user_id: str
+    channel_id: str
+
+
+@dataclass
+class Webhook:
+    id: str
+    token: str
+
+
+class User:
     def __init__(self, user: dict) -> None:
         self.discriminator = user["discriminator"]
         self.id = user["id"]
@@ -38,45 +63,57 @@ class User(object):
             self.avatar_url = f"{CDN_URL}/avatars/{self.id}/{avatar}.{ext}"
 
 
-class Message(object):
+class Guild:
+    def __init__(self, guild: dict) -> None:
+        self.guild_id = guild["id"]
+        self.channels = [dict_cls(c, Channel) for c in guild["channels"]]
+        self.emojis = [dict_cls(e, Emote) for e in guild["emojis"]]
+        members = [member["user"] for member in guild["members"]]
+        self.members = [User(m) for m in members]
+
+
+class GuildEmojisUpdate:
+    def __init__(self, update: dict) -> None:
+        self.guild_id = update["guild_id"]
+        self.emojis = [dict_cls(e, Emote) for e in update["emojis"]]
+
+
+class GuildMembersChunk:
+    def __init__(self, chunk: dict) -> None:
+        self.chunk_index = chunk["chunk_index"]
+        self.chunk_count = chunk["chunk_count"]
+        self.guild_id = chunk["guild_id"]
+        self.members = [User(m) for m in chunk["members"]]
+
+
+class GuildMemberUpdate:
+    def __init__(self, update: dict) -> None:
+        self.guild_id = update["guild_id"]
+        self.user = User(update["user"])
+
+
+class Message:
     def __init__(self, message: dict) -> None:
         self.attachments = message.get("attachments", [])
         self.channel_id = message["channel_id"]
         self.content = message.get("content", "")
         self.id = message["id"]
-        self.reference = message.get("message_reference", {}).get(
-            "message_id", ""
-        )
         self.webhook_id = message.get("webhook_id", "")
 
         self.mentions = [
             User(mention) for mention in message.get("mentions", [])
         ]
 
+        ref = message.get("message_reference")
+
+        self.reference = dict_cls(ref, MessageReference) if ref else None
+
         author = message.get("author")
 
         self.author = User(author) if author else None
 
 
-@dataclass
-class DeletedMessage(object):
-    channel_id: str
-    id: str
-
-
-@dataclass
-class Typing(object):
-    user_id: str
-    channel_id: str
-
-
-@dataclass
-class Webhook(object):
-    id: str
-    token: str
-
-
-class ChannelType(object):
+class ChannelType:
     GUILD_TEXT = 0
     DM = 1
     GUILD_VOICE = 2
@@ -86,7 +123,7 @@ class ChannelType(object):
     GUILD_STORE = 6
 
 
-class InteractionResponseType(object):
+class InteractionResponseType:
     PONG = 0
     ACKNOWLEDGE = 1
     CHANNEL_MESSAGE = 2
@@ -94,10 +131,7 @@ class InteractionResponseType(object):
     ACKNOWLEDGE_WITH_SOURCE = 5
 
 
-class GatewayIntents(object):
-    def bitmask(bit: int) -> int:
-        return 1 << bit
-
+class GatewayIntents:
     GUILDS = bitmask(0)
     GUILD_MEMBERS = bitmask(1)
     GUILD_BANS = bitmask(2)
@@ -115,7 +149,7 @@ class GatewayIntents(object):
     DIRECT_MESSAGE_TYPING = bitmask(14)
 
 
-class GatewayOpCodes(object):
+class GatewayOpCodes:
     DISPATCH = 0
     HEARTBEAT = 1
     IDENTIFY = 2
@@ -129,7 +163,7 @@ class GatewayOpCodes(object):
     HEARTBEAT_ACK = 11
 
 
-class Payloads(object):
+class Payloads:
     def __init__(self, token: str) -> None:
         self.seq = self.session = None
         self.token = token
@@ -143,25 +177,17 @@ class Payloads(object):
             "d": {
                 "token": self.token,
                 "intents": GatewayIntents.GUILDS
+                | GatewayIntents.GUILD_EMOJIS
+                | GatewayIntents.GUILD_MEMBERS
                 | GatewayIntents.GUILD_MESSAGES
-                | GatewayIntents.GUILD_MESSAGE_TYPING,
+                | GatewayIntents.GUILD_MESSAGE_TYPING
+                | GatewayIntents.GUILD_PRESENCES,
                 "properties": {
                     "$os": "discord",
-                    "$browser": "discord",
+                    "$browser": "Discord Client",
                     "$device": "discord",
                 },
             },
-        }
-
-    def QUERY(self, guild_id: str, query: str, limit: int = 1) -> dict:
-        """
-        Return the Payload to query a member from a guild ID.
-        Return only a single match if `limit` isn't specified.
-        """
-
-        return {
-            "op": GatewayOpCodes.REQUEST_GUILD_MEMBERS,
-            "d": {"guild_id": guild_id, "query": query, "limit": limit},
         }
 
     def RESUME(self) -> dict:

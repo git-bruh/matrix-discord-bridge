@@ -2,20 +2,21 @@ from dataclasses import dataclass
 
 
 @dataclass
-class User(object):
+class User:
     avatar_url: str = ""
-    displayname: str = ""
+    display_name: str = ""
 
 
-class Event(object):
+class Event:
     def __init__(self, event: dict):
-        content = event["content"]
+        content = event.get("content", {})
 
         self.attachment = content.get("url")
-        self.author = event["author"]
         self.body = content.get("body", "").strip()
-        self.event_id = event["event_id"]
+        self.formatted_body = content.get("formatted_body", "")
+        self.id = event["event_id"]
         self.is_direct = content.get("is_direct", False)
+        self.redacts = event.get("redacts", "")
         self.room_id = event["room_id"]
         self.sender = event["sender"]
         self.state_key = event.get("state_key", "")

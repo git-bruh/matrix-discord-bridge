@@ -3,6 +3,7 @@ from misc import dict_cls
 
 CDN_URL = "https://cdn.discordapp.com"
 ID_LEN = 18
+MESSAGE_LIMIT = 2000
 
 
 def bitmask(bit: int) -> int:

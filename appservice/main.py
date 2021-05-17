@@ -207,7 +207,9 @@ class MatrixClient(AppService):
         reference: discord.MessageReference = None,
     ) -> dict:
         content = {
-            "body": message,
+            # Replace single newlines with double newlines so that clients
+            # render them properly.
+            "body": re.sub("\\b\n\\b", "\n\n", message),
             "format": "org.matrix.custom.html",
             "msgtype": "m.text",
             "formatted_body": self.get_fmt(message, emotes),
@@ -237,12 +239,12 @@ class MatrixClient(AppService):
                 content = {
                     **content,
                     "body": (
-                        f"> <{event.sender}> {event.body}\n{content['body']}"
+                        f"> <{event.sender}> {event.body}\n\n{content['body']}"
                     ),
                     "m.relates_to": {"m.in_reply_to": {"event_id": event.id}},
                     "formatted_body": f"""<mx-reply><blockquote>\
-<a href='https://matrix.to/#/{event.room_id}/{event.id}'>\
-In reply to</a><a href='https://matrix.to/#/{event.sender}'>\
+<a href="https://matrix.to/#/{event.room_id}/{event.id}">\
+In reply to</a><a href="https://matrix.to/#/{event.sender}">\
 {event.sender}</a><br>{event.formatted_body}</blockquote></mx-reply>\
 {content["formatted_body"]}""",
                 }
@@ -311,8 +313,6 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
     def process_message(self, event: matrix.Event) -> str:
         message = event.new_body if event.new_body else event.body
 
-        message = message[:2000]  # Discord limit.
-
         id_regex = f"[0-9]{{{discord.ID_LEN}}}"
 
         emotes = re.findall(r":(\w*):", message)
@@ -341,7 +341,8 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
                             replace, f"<@{match.group()}>"
                         )
 
-        return message
+        # We trim the message later as emotes take up extra characters too.
+        return message[: discord.MESSAGE_LIMIT]
 
     def upload_emote(self, emote_name: str, emote_id: str) -> None:
         # There won't be a race condition here, since only a unique
@@ -623,12 +624,12 @@ class DiscordClient(Gateway):
 
         # `except_deleted` for invalid channels.
         # TODO can this block for too long ?
-        for channel in re.findall(r"<#([0-9]{{{discord.ID_LEN}}})>", content):
-            channel_ = except_deleted(self.get_channel)(channel)
-            content = content.replace(
-                f"<#{channel}>",
-                f"#{channel_.name}" if channel_ else "deleted-channel",
+        for channel in re.findall(f"<#([0-9]{{{discord.ID_LEN}}})>", content):
+            discord_channel = except_deleted(self.get_channel)(channel)
+            name = (
+                discord_channel.name if discord_channel else "deleted-channel"
             )
+            content = content.replace(f"<#{channel}>", f"#{name}")
 
         # { "emote_name": "emote_id" }
         for emote in re.findall(regex, content):

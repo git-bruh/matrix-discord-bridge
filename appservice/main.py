@@ -99,9 +99,6 @@ class MatrixClient(AppService):
 
         author = self.get_members(message.room_id)[message.sender]
 
-        if not author.display_name:
-            author.display_name = message.sender
-
         webhook = self.discord.get_webhook(
             channel_id, self.discord.webhook_name
         )
@@ -129,7 +126,7 @@ class MatrixClient(AppService):
                 webhook,
                 self.mxc_url(author.avatar_url),
                 message.body,
-                author.display_name,
+                author.display_name if author.display_name else message.sender,
             ).id
 
             with Cache.lock:
@@ -207,9 +204,7 @@ class MatrixClient(AppService):
         reference: discord.MessageReference = None,
     ) -> dict:
         content = {
-            # Replace single newlines with double newlines so that clients
-            # render them properly.
-            "body": re.sub("\\b\n\\b", "\n\n", message),
+            "body": message,
             "format": "org.matrix.custom.html",
             "msgtype": "m.text",
             "formatted_body": self.get_fmt(message, emotes),
@@ -239,7 +234,7 @@ class MatrixClient(AppService):
                 content = {
                     **content,
                     "body": (
-                        f"> <{event.sender}> {event.body}\n\n{content['body']}"
+                        f"> <{event.sender}> {event.body}\n{content['body']}"
                     ),
                     "m.relates_to": {"m.in_reply_to": {"event_id": event.id}},
                     "formatted_body": f"""<mx-reply><blockquote>\

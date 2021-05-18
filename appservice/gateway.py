@@ -33,9 +33,7 @@ class Gateway:
                 websockets.ConnectionClosedError,
                 websockets.InvalidMessage,
             ):
-                # TODO reconnect
-                self.logger.exception("Quitting, connection lost.")
-                break
+                self.logger.exception("Connection lost, reconnecting.")
 
             # Stop sending heartbeats until we reconnect.
             if self.heartbeat_task and not self.heartbeat_task.cancelled():
@@ -117,7 +115,6 @@ class Gateway:
         elif otype == "GUILD_EMOJIS_UPDATE":
             obj = discord.GuildEmojisUpdate(data)
         else:
-            self.logger.info(f"Unknown OTYPE: {otype}")
             return
 
         func = getattr(self, f"on_{otype.lower()}", None)

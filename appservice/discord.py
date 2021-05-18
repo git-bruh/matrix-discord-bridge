@@ -105,9 +105,9 @@ class Message:
             User(mention) for mention in message.get("mentions", [])
         ]
 
-        ref = message.get("message_reference")
+        ref = message.get("referenced_message")
 
-        self.reference = dict_cls(ref, MessageReference) if ref else None
+        self.referenced_message = Message(ref) if ref else None
 
         author = message.get("author")
 

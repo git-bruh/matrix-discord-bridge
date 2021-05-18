@@ -201,7 +201,7 @@ class MatrixClient(AppService):
         message: str,
         emotes: dict,
         edit: str = "",
-        reference: discord.MessageReference = None,
+        reference: discord.Message = None,
     ) -> dict:
         content = {
             "body": message,
@@ -210,37 +210,43 @@ class MatrixClient(AppService):
             "formatted_body": self.get_fmt(message, emotes),
         }
 
+        ref_id = None
+
         if reference:
             # Reply to a Discord message.
             with Cache.lock:
-                event_id = Cache.cache["d_messages"].get(reference.message_id)
+                ref_id = Cache.cache["d_messages"].get(reference.id)
 
             # Reply to a Matrix message. (maybe)
-            if not event_id:
+            if not ref_id:
                 with Cache.lock:
-                    event_id = [
+                    ref_id = [
                         k
                         for k, v in Cache.cache["m_messages"].items()
-                        if v == reference.message_id
+                        if v == reference.id
                     ]
-                    event_id = next(iter(event_id), "")
+                    ref_id = next(iter(ref_id), "")
 
-        if reference and event_id:
+        # TODO use only the original event for replies, don't process ref.
+        # We do this as nested replies get messed up.
+        if ref_id:
             event = except_deleted(self.get_event)(
-                event_id,
+                ref_id,
                 self.get_room_id(self.discord.matrixify(reference.channel_id)),
             )
             if event:
+                r_content, r_emotes = self.discord.process_message(reference)
+                r_fmt = self.get_fmt(r_content, r_emotes)
                 content = {
                     **content,
                     "body": (
-                        f"> <{event.sender}> {event.body}\n{content['body']}"
+                        f"> <{event.sender}> {r_content}\n{content['body']}"
                     ),
                     "m.relates_to": {"m.in_reply_to": {"event_id": event.id}},
                     "formatted_body": f"""<mx-reply><blockquote>\
 <a href="https://matrix.to/#/{event.room_id}/{event.id}">\
 In reply to</a><a href="https://matrix.to/#/{event.sender}">\
-{event.sender}</a><br>{event.formatted_body}</blockquote></mx-reply>\
+{event.sender}</a><br>{r_fmt}</blockquote></mx-reply>\
 {content["formatted_body"]}""",
                 }
 
@@ -517,7 +523,7 @@ class DiscordClient(Gateway):
         content_, emotes = self.process_message(message)
 
         content = self.app.create_message_event(
-            content_, emotes, reference=message.reference
+            content_, emotes, reference=message.referenced_message
         )
 
         with Cache.lock:

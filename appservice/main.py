@@ -175,7 +175,7 @@ class MatrixClient(AppService):
         content = {
             "room_alias_name": f"{self.format}{channel.id}",
             "name": channel.name,
-            "topic": channel.topic,
+            "topic": channel.topic if channel.topic else channel.name,
             "visibility": "private",
             "invite": [sender],
             "creation_content": {"m.federate": True},
@@ -189,7 +189,9 @@ class MatrixClient(AppService):
                     "content": {"history_visibility": "shared"},
                 },
             ],
-            "power_level_content_override": {"users": {sender: 100}},
+            "power_level_content_override": {
+                "users": {sender: 100, self.user_id: 100}
+            },
         }
 
         resp = self.send("POST", "/createRoom", content)

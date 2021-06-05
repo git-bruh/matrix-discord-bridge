@@ -124,7 +124,7 @@ class MatrixClient(AppService):
 
             message_id = self.discord.send_webhook(
                 webhook,
-                self.mxc_url(author.avatar_url),
+                self.mxc_url(author.avatar_url) if author.avatar_url else None,
                 message.body,
                 author.display_name if author.display_name else message.sender,
             ).id

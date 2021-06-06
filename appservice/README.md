@@ -13,18 +13,33 @@
     "as_token": "my-secret-as-token",
     "hs_token": "my-secret-hs-token",
     "user_id": "appservice-discord",
-    # Homeserver running on the same machine, listening on port 8008.
     "homeserver": "http://127.0.0.1:8008",
-    # Change "localhost" to your server_name.
-    # Eg. "kde.org" is the server_name in "@testuser:kde.org".
     "server_name": "localhost",
     "discord_token": "my-secret-discord-token",
-    "port": 5000,  # Port to run the bottle app on.
+    "port": 5000,
     "database": "/path/to/bridge.db"
 }
 ```
 
-* Create `appservice.yaml` and add it to your homeserver configuration:
+`as_token`: The token sent by the appservice to the homeserver with events.
+
+`hs_token`: The token sent by the homeserver to the appservice with events.
+
+`user_id`: The username of the appservice user, it should match the `sender_localpart` in `appservice.yaml`.
+
+`homeserver`: A URL including the port where the homeserver is listening on. The default should work in most cases where the homeserver is running locally and listening for non-TLS connections on port `8008`.
+
+`server_name`: The server's name, it is the part after `:` in MXIDs. As an example, `kde.org` is the server name in `@testuser:kde.org`.
+
+`discord_token`: The Discord bot's token.
+
+`port`: The port where `bottle` will listen for events.
+
+`database`: Full path to the bridge's database.
+
+Both `as_token` and `hs_token` MUST be the same as their values in `appservice.yaml`. Their value can be set to anything, refer to the [spec](https://matrix.org/docs/spec/application_service/r0.1.2#registration).
+
+* Create `appservice.yaml` and add it to your homeserver:
 
 ```
 id: "discord"
@@ -36,12 +51,34 @@ namespaces:
   users:
     - exclusive: true
       regex: "@_discord.*"
-    # Work around for temporary bug in dendrite.
-    - regex: "@appservice-discord"
+    - exclusive: true
+      regex: "@appservice-discord"
   aliases:
-    - exclusive: false
+    - exclusive: true
       regex: "#_discord.*"
   rooms: []
+```
+
+The following lines should be added to the homeserver configuration. The full path to `appservice.yaml` might be required:
+
+* `synapse`:
+
+```
+# A list of application service config files to use
+#
+app_service_config_files:
+  - appservice.yaml
+```
+
+* `dendrite`:
+
+```
+app_service_api:
+  internal_api:
+    # ...
+  database:
+    # ...
+  config_files: [appservice.yaml]
 ```
 
 A path can optionally be passed as the first argument to `main.py`. This path will be used as the base directory for the database and log file.
@@ -59,6 +96,8 @@ This bridge is written with:
 ## NOTES
 
 * A basic sqlite database is used for keeping track of bridged rooms.
+
+* Discord users can be tagged only by mentioning the dummy Matrix user, which requires the client to send a formatted body containing HTML. Partial mentions are not used to avoid unreliable queries to the websocket.
 
 * Logs are saved to the `appservice.log` file in `$PWD` or the specified directory.
 

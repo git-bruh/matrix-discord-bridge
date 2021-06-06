@@ -27,6 +27,7 @@ class MatrixClient(AppService):
         self.discord = DiscordClient(self, config, http)
         self.format = "_discord_"  # "{@,#}_discord_1234:localhost"
 
+        # TODO Find a cleaner way to use these keys.
         for k in ("m_emotes", "m_members", "m_messages"):
             Cache.cache[k] = {}
 
@@ -106,6 +107,8 @@ class MatrixClient(AppService):
         if message.relates_to and message.reltype == "m.replace":
             with Cache.lock:
                 message_id = Cache.cache["m_messages"].get(message.relates_to)
+
+            # TODO validate if the original author sent the edit.
 
             if not message_id or not message.new_body:
                 return
@@ -410,6 +413,7 @@ class DiscordClient(Gateway):
         self.app = appservice
         self.webhook_name = "matrix_bridge"
 
+        # TODO Find a cleaner way to use these keys.
         for k in ("d_emotes", "d_messages", "d_webhooks"):
             Cache.cache[k] = {}
 
@@ -561,6 +565,14 @@ class DiscordClient(Gateway):
 
         room_id = self.app.get_room_id(self.matrixify(message.channel_id))
         mxid = self.matrixify(message.author.id, user=True)
+
+        # It is possible that a webhook edit's it's own old message
+        # after changing it's name, hence we generate a new mxid from
+        # the hashed username, but that mxid hasn't been registered before,
+        # so the request fails with:
+        # M_FORBIDDEN: Application service has not registered this user
+        if not self.app.db.fetch_user(mxid):
+            return
 
         content_, emotes = self.process_message(message)
 

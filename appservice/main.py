@@ -232,26 +232,40 @@ class MatrixClient(AppService):
                     ]
                     ref_id = next(iter(ref_id), "")
 
-        # TODO use only the original event for replies, don't process ref.
-        # We do this as nested replies get messed up.
         if ref_id:
             event = except_deleted(self.get_event)(
                 ref_id,
                 self.get_room_id(self.discord.matrixify(reference.channel_id)),
             )
             if event:
-                r_content, r_emotes = self.discord.process_message(reference)
-                r_fmt = self.get_fmt(r_content, r_emotes)
+                # Content with the reply fallbacks stripped.
+                tmp = ""
+                # We don't want to strip lines starting with "> " after
+                # encountering a regular line, so we use this variable.
+                got_fallback = True
+                for line in event.body.split("\n"):
+                    if not line.startswith("> "):
+                        got_fallback = False
+                    if not got_fallback:
+                        tmp += line
+
+                event.body = tmp
+                event.formatted_body = (
+                    re.sub(".*</mx-reply>", "", event.formatted_body)
+                    if event.formatted_body
+                    else event.body
+                )
+
                 content = {
                     **content,
                     "body": (
-                        f"> <{event.sender}> {r_content}\n{content['body']}"
+                        f"> <{event.sender}> {event.body}\n{content['body']}"
                     ),
                     "m.relates_to": {"m.in_reply_to": {"event_id": event.id}},
                     "formatted_body": f"""<mx-reply><blockquote>\
 <a href="https://matrix.to/#/{event.room_id}/{event.id}">\
 In reply to</a><a href="https://matrix.to/#/{event.sender}">\
-{event.sender}</a><br>{r_fmt}</blockquote></mx-reply>\
+{event.sender}</a><br>{event.formatted_body}</blockquote></mx-reply>\
 {content["formatted_body"]}""",
                 }
 

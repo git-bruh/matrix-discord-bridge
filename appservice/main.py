@@ -7,6 +7,7 @@ import sys
 import threading
 from typing import Dict, List, Tuple
 
+import markdown
 import urllib3
 
 import discord
@@ -281,23 +282,7 @@ In reply to</a><a href="https://matrix.to/#/{event.sender}">\
         return content
 
     def get_fmt(self, message: str, emotes: dict) -> str:
-        replace = [
-            # Bold.
-            ("**", "<strong>", "</strong>"),
-            # Code blocks.
-            ("```", "<pre><code>", "</code></pre>"),
-            # Spoilers.
-            ("||", "<span data-mx-spoiler>", "</span>"),
-            # Strikethrough.
-            ("~~", "<del>", "</del>"),
-        ]
-
-        for replace_ in replace:
-            for i in range(1, message.count(replace_[0]) + 1):
-                if i % 2:
-                    message = message.replace(replace_[0], replace_[1], 1)
-                else:
-                    message = message.replace(replace_[0], replace_[2], 1)
+        message = markdown.markdown(message)
 
         # Upload emotes in multiple threads so that we don't
         # block the Discord bot for too long.

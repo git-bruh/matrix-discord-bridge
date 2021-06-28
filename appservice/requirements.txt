@@ -1,3 +1,4 @@
 bottle
+markdown
 urllib3
 websockets

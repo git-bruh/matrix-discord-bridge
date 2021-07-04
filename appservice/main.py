@@ -656,6 +656,11 @@ class DiscordClient(Gateway):
         for attachment in message.attachments:
             content += f"\n{attachment['url']}"
 
+        # Append stickers to message.
+        for sticker in message.stickers:
+            if sticker.format_type != 3:  # 3 == Lottie format.
+                content += f"\n{discord.CDN_URL}/stickers/{sticker.id}.png"
+
         return content, emotes
 
 

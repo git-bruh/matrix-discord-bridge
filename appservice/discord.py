@@ -35,6 +35,13 @@ class MessageReference:
 
 
 @dataclass
+class Sticker:
+    name: str
+    id: str
+    format_type: int
+
+
+@dataclass
 class Typing:
     user_id: str
     channel_id: str
@@ -113,6 +120,11 @@ class Message:
         author = message.get("author")
 
         self.author = User(author) if author else None
+
+        self.stickers = [
+            dict_cls(sticker, Sticker)
+            for sticker in message.get("sticker_items", [])
+        ]
 
 
 class ChannelType:

@@ -252,7 +252,7 @@ class MatrixClient(AppService):
 
                 event.body = tmp
                 event.formatted_body = (
-                    re.sub(".*</mx-reply>", "", event.formatted_body)
+                    re.sub("<mx-reply>.*</mx-reply>", "", event.formatted_body)
                     if event.formatted_body
                     else event.body
                 )

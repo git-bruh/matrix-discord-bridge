@@ -274,14 +274,14 @@ class MatrixClient(AppService):
 <a href="https://matrix.to/#/{event.room_id}/{event.id}">\
 In reply to</a><a href="https://matrix.to/#/{event.sender}">\
 {event.sender}</a><br>{event.formatted_body}</blockquote></mx-reply>\
-{content["formatted_body"]}""",
+{content.get("formatted_body", content['body'])}""",
                 }
 
         if edit:
             content = {
                 **content,
                 "body": f" * {content['body']}",
-                "formatted_body": f" * {content['formatted_body']}",
+                "formatted_body": f" * {content.get('formatted_body', content['body'])}",
                 "m.relates_to": {"event_id": edit, "rel_type": "m.replace"},
                 "m.new_content": {**content},
             }

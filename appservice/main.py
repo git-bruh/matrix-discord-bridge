@@ -211,10 +211,17 @@ class MatrixClient(AppService):
     ) -> dict:
         content = {
             "body": message,
-            "format": "org.matrix.custom.html",
             "msgtype": "m.text",
-            "formatted_body": self.get_fmt(message, emotes),
         }
+
+        fmt = self.get_fmt(message, emotes)
+
+        if len(fmt) != len(message):
+            content = {
+                **content,
+                "format": "org.matrix.custom.html",
+                "formatted_body": fmt,
+            }
 
         ref_id = None
 
@@ -282,7 +289,9 @@ In reply to</a><a href="https://matrix.to/#/{event.sender}">\
         return content
 
     def get_fmt(self, message: str, emotes: dict) -> str:
-        message = markdown.markdown(message)
+        message = (
+            markdown.markdown(message).replace("<p>", "").replace("</p>", "")
+        )
 
         # Upload emotes in multiple threads so that we don't
         # block the Discord bot for too long.

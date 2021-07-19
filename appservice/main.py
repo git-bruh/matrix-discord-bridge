@@ -270,6 +270,7 @@ class MatrixClient(AppService):
                         f"> <{event.sender}> {event.body}\n{content['body']}"
                     ),
                     "m.relates_to": {"m.in_reply_to": {"event_id": event.id}},
+                    "format": "org.matrix.custom.html",
                     "formatted_body": f"""<mx-reply><blockquote>\
 <a href="https://matrix.to/#/{event.room_id}/{event.id}">\
 In reply to</a><a href="https://matrix.to/#/{event.sender}">\

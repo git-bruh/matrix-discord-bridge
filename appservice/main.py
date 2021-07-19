@@ -273,7 +273,9 @@ class MatrixClient(AppService):
                     "formatted_body": f"""<mx-reply><blockquote>\
 <a href="https://matrix.to/#/{event.room_id}/{event.id}">\
 In reply to</a><a href="https://matrix.to/#/{event.sender}">\
-{event.sender}</a><br>{event.formatted_body}</blockquote></mx-reply>\
+{event.sender}</a><br>\
+{event.formatted_body if event.formatted_body else event.body}\
+</blockquote></mx-reply>\
 {content.get("formatted_body", content['body'])}""",
                 }
 

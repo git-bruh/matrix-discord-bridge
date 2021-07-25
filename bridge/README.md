@@ -4,6 +4,8 @@
 
 ## Usage
 
+**Disclaimer:** This was one of the author's first non-trivial projects with Python, so code quality is not too good. The appservice has much better code.
+
 * Run `main.py` to generate `config.json`
 
 * Edit `config.json`:
@@ -28,4 +30,4 @@ This bridge does not use databases for keeping track of bridged rooms to avoid a
 
 * Normal Discord bot functionality like commands can be added to the bot via [cogs](https://discordpy.readthedocs.io/en/latest/ext/commands/cogs.html), example [here](https://gist.github.com/EvieePy/d78c061a4798ae81be9825468fe146be).
 
-NOTE: [Privileged Intents](https://discordpy.readthedocs.io/en/latest/intents.html#privileged-intents) must be enabled for your Discord bot.
+**NOTE:** [Privileged Intents](https://discordpy.readthedocs.io/en/latest/intents.html#privileged-intents) must be enabled for your Discord bot.

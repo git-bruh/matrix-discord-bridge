@@ -20,3 +20,9 @@ Check their READMEs for specific information.
 - [x] Discord emojis displayed as inline images
 - [x] Sending Discord emotes from Matrix (`:emote_name:`)
 - [x] Mentioning Discord users via partial username (`@partialname`)
+
+## TODO
+
+- [ ] Handle cases where the webhook is messed with on the Discord side (Deleted/Edited by someone other than the bot).
+- [ ] Use embeds on Discord side for replies.
+- [ ] Unbridging.

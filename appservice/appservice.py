@@ -188,8 +188,10 @@ class AppService(bottle.Bottle):
         content_type: str = "application/json",
         endpoint: str = "/_matrix/client/r0",
     ) -> dict:
-        params["access_token"] = self.as_token
-        headers = {"Content-Type": content_type}
+        headers = {
+            "Authorization": f"Bearer {self.as_token}",
+            "Content-Type": content_type,
+        }
         payload = json.dumps(content) if isinstance(content, dict) else content
         endpoint = (
             f"{self.base_url}{endpoint}{path}?"

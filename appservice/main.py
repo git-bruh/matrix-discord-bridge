@@ -9,6 +9,7 @@ from typing import Dict, List, Tuple
 
 import markdown
 import urllib3
+import urllib.parse
 
 import discord
 import matrix
@@ -27,6 +28,7 @@ class MatrixClient(AppService):
         self.db = DataBase(config["database"])
         self.discord = DiscordClient(self, config, http)
         self.format = "_discord_"  # "{@,#}_discord_1234:localhost"
+        self.id_regex = f"[0-9]{{{discord.ID_LEN}}}"
 
         # TODO Find a cleaner way to use these keys.
         for k in ("m_emotes", "m_members", "m_messages"):
@@ -327,15 +329,28 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
 
         return message
 
+    def mention_regex(self, encode: bool) -> str:
+        mention = "@"
+        colon = ":"
+
+        if encode:
+            mention = urllib.parse.quote(mention)
+            colon = urllib.parse.quote(colon)
+
+        return f"{mention}{self.format}{self.id_regex}{colon}{re.escape(self.server_name)}"
+
     def process_message(self, event: matrix.Event) -> str:
         message = event.new_body if event.new_body else event.body
 
-        id_regex = f"[0-9]{{{discord.ID_LEN}}}"
-
         emotes = re.findall(r":(\w*):", message)
+
         mentions = re.findall(
-            f"@{self.format}{id_regex}:{re.escape(self.server_name)}",
-            event.formatted_body,
+            self.mention_regex(encode=False), event.formatted_body
+        )
+        # For clients that properly encode mentions.
+        # 'https://matrix.to/#/%40_discord_...%3Adomain.tld'
+        mentions.extend(
+            re.findall(self.mention_regex(encode=True), event.formatted_body)
         )
 
         with Cache.lock:
@@ -347,7 +362,7 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
         for mention in set(mentions):
             username = self.db.fetch_user(mention).get("username")
             if username:
-                match = re.search(id_regex, mention)
+                match = re.search(self.id_regex, mention)
 
                 if match:
                     # Replace the 'mention' so that the user is tagged

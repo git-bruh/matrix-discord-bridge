@@ -360,7 +360,10 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
                     message = message.replace(f":{emote}:", emote_)
 
         for mention in set(mentions):
-            username = self.db.fetch_user(mention).get("username")
+            # Unquote just in-case we matched an encoded username.
+            username = self.db.fetch_user(urllib.parse.unquote(mention)).get(
+                "username"
+            )
             if username:
                 match = re.search(self.id_regex, mention)
 

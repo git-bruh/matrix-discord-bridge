@@ -4,8 +4,6 @@
 
 ## Usage
 
-**Disclaimer:** This was one of the author's first non-trivial projects with Python, so code quality is not too good. The appservice has much better code.
-
 * Run `bridge.py` to generate `config.json`
 
 * Edit `config.json`:

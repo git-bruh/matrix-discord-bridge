@@ -89,6 +89,7 @@ Eg. Running `python3 main.py /path/to/my/dir` will store the database and logs i
 After setting up the bridge, send a direct message to `@appservice-discord:domain.tld` containing the channel ID to be bridged (`!bridge 123456`).
 
 This bridge is written with:
+
 * `bottle`: Receiving events from the homeserver.
 * `urllib3`: Sending requests, thread safety.
 * `websockets`: Connecting to Discord. (Big thanks to an anonymous person "nesslersreagent" for figuring out the initial connection mess.)

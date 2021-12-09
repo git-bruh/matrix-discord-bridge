@@ -113,11 +113,8 @@ class DataBase:
         """
 
         with self.lock:
-            self.cur.execute("SELECT * FROM users")
-            users = self.cur.fetchall()
+            self.cur.execute("SELECT * FROM users where mxid = ?", [mxid])
 
-        user: dict = next(
-            iter([user for user in users if user["mxid"] == mxid]), {}
-        )
+            user = self.cur.fetchone()
 
-        return user
+        return {} if not user else user

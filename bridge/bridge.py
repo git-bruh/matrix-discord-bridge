@@ -4,8 +4,10 @@ import logging
 import os
 import re
 import sys
-import uuid
+from tempfile import gettempdir
 
+import io
+import magic
 import aiofiles
 import aiofiles.os
 import aiohttp
@@ -21,6 +23,7 @@ def config_gen(config_file):
         "password": "my-secret-password",
         "token": "my-secret-token",
         "discord_cmd_prefix": "my-command-prefix",
+        "textenabled": "true",
         "bridge": {"channel_id": "room_id"},
     }
 
@@ -38,7 +41,16 @@ def config_gen(config_file):
 
 config = config_gen("config.json")
 message_store = {}
+textenabled = config.get('textenabled')
+if textenabled == "true":
+    textenabled = True
+elif textenabled == "True":
+    textenabled = True
 
+elif textenabled == "false":
+    textenabled = False
+elif textenabled == "False":
+    textenabled = False
 
 class MatrixClient(nio.AsyncClient):
     def __init__(self, *args, **kwargs):
@@ -152,13 +164,56 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
         self, message, channel_id, emotes, reply_id=None, edit_id=None
     ):
         room_id = config["bridge"][str(channel_id)]
+        content = None
+        # Parse message for file
+        try:
+            parmes = message.split("http")[-1]
+            parmes = f"http{parmes}"
+        except:
+            parmes = message
 
-        content = {
-            "body": message,
-            "format": "org.matrix.custom.html",
-            "formatted_body": await self.get_fmt_body(message, emotes),
-            "msgtype": "m.text",
-        }
+        message = f'{message.split("]", 1)[0]}]\n{message.split("]", 1)[1]}'
+
+        if textenabled:
+            content = {
+                "body": message,
+                "format": "org.matrix.custom.html",
+                # "formatted_body": await self.get_fmt_body(message, emotes),
+                "msgtype": "m.text",
+            }
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(parmes) as resp:
+                    if resp.status != 200:
+                        self.logger.warning(f"Failed to download {parmes}")
+                        return
+                    data = io.BytesIO(await resp.read())
+
+            temporarylocation = f"{parmes.split('/')[-1]}"
+            with open(temporarylocation, 'wb') as out:  ## Open temporary file as bytes
+                out.write(data.read())  ## Read bytes into file
+
+            ## Do stuff with module/file
+            mime_type = magic.from_file(temporarylocation, mime=True)
+            file_stat = await aiofiles.os.stat(temporarylocation)
+            filenamef = parmes.split("/")[-1]
+
+        except:
+            filenamef = parmes
+            mime_type = None
+
+        try:
+            async with aiofiles.open(temporarylocation, "r+b") as f:
+                resp, maybe_keys = await self.upload(
+                    f,
+                    content_type=mime_type,
+                    filename=filenamef,
+                    filesize=file_stat.st_size)
+            os.remove(temporarylocation)  ## Delete file when done
+
+        except:
+            pass
 
         if reply_id:
             reply_event = await self.room_get_event(room_id, reply_id)
@@ -182,11 +237,59 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
                 "m.new_content": {**content},
             }
 
-        message = await self.room_send(
-            room_id=room_id, message_type="m.room.message", content=content
-        )
+        # Check if mime_type is set and what type.
+        if mime_type and mime_type[:5] == "image":
+            content = {
+                "body": message.split(" http")[0],  # descriptive title is discord senders name
+                "info": {
+                    "size": file_stat.st_size,
+                    "mimetype": mime_type,
+                    "thumbnail_info": None,  # TODO
+                    # "w": width,  # width in pixel
+                    # "h": height,  # height in pixel
+                    "thumbnail_url": None,  # TODO
+                },
+                "msgtype": "m.image",
+                "url": resp.content_uri,
+            }
 
-        return message.event_id
+        elif mime_type and mime_type[:5] == "video":
+            content = {
+                "body": message.split(" http")[0],  # descriptive title is discord senders name
+                "info": {
+                    "size": file_stat.st_size,
+                    "mimetype": mime_type,
+                    "thumbnail_info": None,  # TODO
+                    # "w": width,  # width in pixel
+                    # "h": height,  # height in pixel
+                    "thumbnail_url": None,  # TODO
+                },
+                "msgtype": "m.video",
+                "url": resp.content_uri,
+            }
+
+        elif mime_type and mime_type[:5] == "audio":
+            content = {
+                "body": message.split(" http")[0],  # descriptive title is discord senders name
+                "info": {
+                    "size": file_stat.st_size,
+                    "mimetype": mime_type,
+                    "thumbnail_info": None,  # TODO
+                    # "w": width,  # width in pixel
+                    # "h": height,  # height in pixel
+                    "thumbnail_url": None,  # TODO
+                },
+                "msgtype": "m.audio",
+                "url": resp.content_uri,
+            }
+
+        if content:
+            message = await self.room_send(
+                room_id=room_id, message_type="m.room.message", content=content
+            )
+
+            return message.event_id
+
 
     async def message_redact(self, message, channel_id):
         await self.room_redact(
@@ -194,7 +297,7 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
         )
 
     async def webhook_send(
-        self, author, avatar, message, event_id, channel_id, embed=None
+        self, author, avatar, message, event_id, channel_id, embed=None, file=None
     ):
         channel = self.discord_client.channel_store[channel_id]
 
@@ -219,6 +322,7 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
                 avatar_url=avatar,
                 content=message,
                 embed=embed,
+                file=file,
                 wait=True,
             )
 
@@ -441,21 +545,23 @@ class Callbacks(object):
         message = await self.process_message(message, channel_id)
 
         embed = None
-
+        data = None
         # Get attachments.
         try:
             attachment = event.url.split("/")[-1]
             # TODO: Fix URL for attachments forwarded from other rooms.
             attachment = f"{url}/{homeserver}/{attachment}"
 
-            embed = discord.Embed(colour=discord.Colour.blue(), title=message)
-            embed.set_image(url=attachment)
-
-            # Send attachment URL in message along with embed,
-            # Just in-case the attachment is not an image.
-            message = attachment
-        except AttributeError:
+            #Download attachment to variable 'data'
+            async with aiohttp.ClientSession() as session:
+                async with session.get(attachment) as resp:
+                    if resp.status != 200:
+                        self.logger.warning(f"Failed to download {parmes}")
+                        return
+                    data = io.BytesIO(await resp.read())
+        except:
             pass
+
 
         # Get avatar.
         for user in room.users.values():
@@ -464,10 +570,17 @@ class Callbacks(object):
                     avatar = user.avatar_url.split("/")[-1]
                     avatar = f"{url}/{homeserver}/{avatar}"
                     break
+        filename = message
+        if data:
+            message = None
+            await self.matrix_client.webhook_send(
+                author, avatar, message, event.event_id, channel_id, embed=embed, file=discord.File(data, filename)
+                )
+        if textenabled and not data:
+            await self.matrix_client.webhook_send(
+                author, avatar, message, event.event_id, channel_id, embed=embed
+                )
 
-        await self.matrix_client.webhook_send(
-            author, avatar, message, event.event_id, channel_id, embed=embed
-        )
 
     async def redaction_callback(self, room, event):
         if await self.to_return(room, event):

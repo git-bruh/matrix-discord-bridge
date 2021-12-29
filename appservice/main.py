@@ -490,7 +490,7 @@ class DiscordClient(Gateway):
         Discord user.
         """
 
-        if message.webhook_id:
+        if message.webhook_id and not message.application_id:
             hashed = hash_str(message.author.username)
             message.author.id = str(int(message.author.id) + hashed)
 

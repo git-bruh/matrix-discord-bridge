@@ -108,6 +108,7 @@ class Message:
         self.content = message.get("content", "")
         self.id = message["id"]
         self.webhook_id = message.get("webhook_id", "")
+        self.application_id = message.get("application_id", "")
 
         self.mentions = [
             User(mention) for mention in message.get("mentions", [])

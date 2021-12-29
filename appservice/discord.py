@@ -3,7 +3,6 @@ from dataclasses import dataclass
 from misc import dict_cls
 
 CDN_URL = "https://cdn.discordapp.com"
-ID_LEN = 18
 MESSAGE_LIMIT = 2000
 
 

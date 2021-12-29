@@ -28,7 +28,7 @@ class MatrixClient(AppService):
         self.db = DataBase(config["database"])
         self.discord = DiscordClient(self, config, http)
         self.format = "_discord_"  # "{@,#}_discord_1234:localhost"
-        self.id_regex = f"[0-9]{{{discord.ID_LEN}}}"
+        self.id_regex = "[0-9]+"  # Snowflakes may have variable length
 
         # TODO Find a cleaner way to use these keys.
         for k in ("m_emotes", "m_members", "m_messages"):
@@ -329,28 +329,32 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
 
         return message
 
-    def mention_regex(self, encode: bool) -> str:
+    def mention_regex(self, encode: bool, id_as_group: bool) -> str:
         mention = "@"
         colon = ":"
+        snowflake = self.id_regex
 
         if encode:
             mention = urllib.parse.quote(mention)
             colon = urllib.parse.quote(colon)
 
-        return f"{mention}{self.format}{self.id_regex}{colon}{re.escape(self.server_name)}"
+        if id_as_group:
+            snowflake = f"({snowflake})"
+
+        return f"{mention}{self.format}{snowflake}{colon}{re.escape(self.server_name)}"
 
     def process_message(self, event: matrix.Event) -> str:
         message = event.new_body if event.new_body else event.body
 
         emotes = re.findall(r":(\w*):", message)
 
-        mentions = re.findall(
-            self.mention_regex(encode=False), event.formatted_body
+        mentions = list(
+            re.finditer(self.mention_regex(encode=False, id_as_group=True), event.formatted_body)
         )
         # For clients that properly encode mentions.
         # 'https://matrix.to/#/%40_discord_...%3Adomain.tld'
         mentions.extend(
-            re.findall(self.mention_regex(encode=True), event.formatted_body)
+            re.finditer(self.mention_regex(encode=True, id_as_group=True), event.formatted_body)
         )
 
         with Cache.lock:
@@ -361,20 +365,15 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
 
         for mention in set(mentions):
             # Unquote just in-case we matched an encoded username.
-            username = self.db.fetch_user(urllib.parse.unquote(mention)).get(
+            username = self.db.fetch_user(urllib.parse.unquote(mention.group(0))).get(
                 "username"
             )
             if username:
-                match = re.search(self.id_regex, mention)
-
-                if match:
-                    # Replace the 'mention' so that the user is tagged
-                    # in the case of replies aswell.
-                    # '> <@_discord_1234:localhost> Message'
-                    for replace in (mention, username):
-                        message = message.replace(
-                            replace, f"<@{match.group()}>"
-                        )
+                # Replace the 'mention' so that the user is tagged
+                # in the case of replies aswell.
+                # '> <@_discord_1234:localhost> Message'
+                for replace in (mention.group(0), username):
+                    message = message.replace(replace, f"<@{mention.group(1)}>")
 
         # We trim the message later as emotes take up extra characters too.
         return message[: discord.MESSAGE_LIMIT]
@@ -668,7 +667,7 @@ class DiscordClient(Gateway):
 
         # `except_deleted` for invalid channels.
         # TODO can this block for too long ?
-        for channel in re.findall(f"<#([0-9]{{{discord.ID_LEN}}})>", content):
+        for channel in re.findall("<#([0-9]+)>", content):
             discord_channel = except_deleted(self.get_channel)(channel)
             name = (
                 discord_channel.name if discord_channel else "deleted-channel"

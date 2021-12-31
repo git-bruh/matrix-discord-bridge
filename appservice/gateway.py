@@ -148,6 +148,15 @@ class Gateway:
 
         return dict_cls(resp, discord.Channel)
 
+    def get_channels(self, guild_id: str) -> dict[str, discord.Channel]:
+        """
+        Get all channels for a given guild ID.
+        """
+
+        resp = self.send("GET", f"/guilds/{guild_id}/channels")
+
+        return {channel["id"]: dict_cls(channel, discord.Channel) for channel in resp}
+
     def get_emotes(self, guild_id: str) -> List[discord.Emote]:
         """
         Get all the emotes for a given guild.

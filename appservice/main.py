@@ -665,14 +665,16 @@ class DiscordClient(Gateway):
                     f"<@{char}{member.id}>", f"@{member.username}"
                 )
 
-        # `except_deleted` for invalid channels.
-        # TODO can this block for too long ?
-        for channel in re.findall("<#([0-9]+)>", content):
-            discord_channel = except_deleted(self.get_channel)(channel)
-            name = (
-                discord_channel.name if discord_channel else "deleted-channel"
-            )
-            content = content.replace(f"<#{channel}>", f"#{name}")
+        # Replace channel IDs with names.
+        channels = re.findall("<#([0-9]+)>", content)
+        if channels:
+            discord_channels = self.get_channels(message.guild_id)
+            for channel in channels:
+                discord_channel = discord_channels.get(channel)
+                name = (
+                    discord_channel.name if discord_channel else "deleted-channel"
+                )
+                content = content.replace(f"<#{channel}>", f"#{name}")
 
         # { "emote_name": "emote_id" }
         for emote in re.findall(regex, content):

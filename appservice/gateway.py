@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 import urllib.parse
-from typing import List
+from typing import List, Dict
 
 import urllib3
 import websockets
@@ -148,7 +148,7 @@ class Gateway:
 
         return dict_cls(resp, discord.Channel)
 
-    def get_channels(self, guild_id: str) -> dict[str, discord.Channel]:
+    def get_channels(self, guild_id: str) -> Dict[str, discord.Channel]:
         """
         Get all channels for a given guild ID.
         """

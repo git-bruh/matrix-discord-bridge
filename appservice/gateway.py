@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 import urllib.parse
-from typing import List
+from typing import Dict, List
 
 import urllib3
 import websockets
@@ -147,6 +147,18 @@ class Gateway:
         resp = self.send("GET", f"/channels/{channel_id}")
 
         return dict_cls(resp, discord.Channel)
+
+    def get_channels(self, guild_id: str) -> Dict[str, discord.Channel]:
+        """
+        Get all channels for a given guild ID.
+        """
+
+        resp = self.send("GET", f"/guilds/{guild_id}/channels")
+
+        return {
+            channel["id"]: dict_cls(channel, discord.Channel)
+            for channel in resp
+        }
 
     def get_emotes(self, guild_id: str) -> List[discord.Emote]:
         """

@@ -73,13 +73,12 @@ def except_deleted(fn):
 
 def hash_str(string: str) -> int:
     """
-    Create the hash for a string (poorly).
+    Create the hash for a string
     """
 
-    hashed = 0
-    results = map(ord, string)
+    hash = 5381
 
-    for result in results:
-        hashed += result
+    for ch in string:
+        hash = ((hash << 5) + hash) + ord(ch)
 
-    return hashed
+    return hash & 0xFFFFFFFF

@@ -3,7 +3,6 @@ from dataclasses import dataclass
 from misc import dict_cls
 
 CDN_URL = "https://cdn.discordapp.com"
-ID_LEN = 18
 MESSAGE_LIMIT = 2000
 
 
@@ -107,6 +106,9 @@ class Message:
         self.channel_id = message["channel_id"]
         self.content = message.get("content", "")
         self.id = message["id"]
+        self.guild_id = message.get(
+            "guild_id", ""
+        )  # Responses for sending webhook messages don't have guild_id
         self.webhook_id = message.get("webhook_id", "")
         self.application_id = message.get("application_id", "")
 

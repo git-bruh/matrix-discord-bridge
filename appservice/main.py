@@ -497,7 +497,7 @@ class DiscordClient(Gateway):
         """
 
         hashed = ''
-        if message.webhook_id and not message.application_id:
+        if message.webhook_id and message.webhook_id != message.application_id:
             hashed = str(hash_str(message.author.username))
 
         mxid = self.matrixify(message.author.id, user=True, hashed=hashed)
@@ -675,13 +675,16 @@ class DiscordClient(Gateway):
         # Replace channel IDs with names.
         channels = re.findall("<#([0-9]+)>", content)
         if channels:
-            discord_channels = self.get_channels(message.guild_id)
-            for channel in channels:
-                discord_channel = discord_channels.get(channel)
-                name = (
-                    discord_channel.name if discord_channel else "deleted-channel"
-                )
-                content = content.replace(f"<#{channel}>", f"#{name}")
+            if not message.guild_id:
+                self.logger.warning(f"Message '{message.id}' in channel '{message.channel_id}' does not have a guild_id!")
+            else:
+                discord_channels = self.get_channels(message.guild_id)
+                for channel in channels:
+                    discord_channel = discord_channels.get(channel)
+                    name = (
+                        discord_channel.name if discord_channel else "deleted-channel"
+                    )
+                    content = content.replace(f"<#{channel}>", f"#{name}")
 
         # { "emote_name": "emote_id" }
         for emote in re.findall(regex, content):

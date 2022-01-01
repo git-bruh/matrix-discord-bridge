@@ -5,11 +5,11 @@ import os
 import re
 import sys
 import threading
+import urllib.parse
 from typing import Dict, List, Tuple
 
 import markdown
 import urllib3
-import urllib.parse
 
 import discord
 import matrix
@@ -351,12 +351,18 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
         emotes = re.findall(r":(\w*):", message)
 
         mentions = list(
-            re.finditer(self.mention_regex(encode=False, id_as_group=True), event.formatted_body)
+            re.finditer(
+                self.mention_regex(encode=False, id_as_group=True),
+                event.formatted_body,
+            )
         )
         # For clients that properly encode mentions.
         # 'https://matrix.to/#/%40_discord_...%3Adomain.tld'
         mentions.extend(
-            re.finditer(self.mention_regex(encode=True, id_as_group=True), event.formatted_body)
+            re.finditer(
+                self.mention_regex(encode=True, id_as_group=True),
+                event.formatted_body,
+            )
         )
 
         with Cache.lock:
@@ -367,9 +373,9 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
 
         for mention in set(mentions):
             # Unquote just in-case we matched an encoded username.
-            username = self.db.fetch_user(urllib.parse.unquote(mention.group(0))).get(
-                "username"
-            )
+            username = self.db.fetch_user(
+                urllib.parse.unquote(mention.group(0))
+            ).get("username")
             if username:
                 if mention.group(2):
                     # Replace mention with plain text for hashed users (webhooks)
@@ -379,7 +385,9 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
                     # in the case of replies aswell.
                     # '> <@_discord_1234:localhost> Message'
                     for replace in (mention.group(0), username):
-                        message = message.replace(replace, f"<@{mention.group(1)}>")
+                        message = message.replace(
+                            replace, f"<@{mention.group(1)}>"
+                        )
 
         # We trim the message later as emotes take up extra characters too.
         return message[: discord.MESSAGE_LIMIT]
@@ -461,7 +469,7 @@ class DiscordClient(Gateway):
             or message.webhook_id in hook_ids
         )
 
-    def matrixify(self, id: str, user: bool = False, hashed: str = '') -> str:
+    def matrixify(self, id: str, user: bool = False, hashed: str = "") -> str:
         return (
             f"{'@' if user else '#'}{self.app.format}"
             f"{id}{'-' + hashed if hashed else ''}:"
@@ -496,7 +504,7 @@ class DiscordClient(Gateway):
         Discord user.
         """
 
-        hashed = ''
+        hashed = ""
         if message.webhook_id and message.webhook_id != message.application_id:
             hashed = str(hash_str(message.author.username))
 
@@ -676,13 +684,17 @@ class DiscordClient(Gateway):
         channels = re.findall("<#([0-9]+)>", content)
         if channels:
             if not message.guild_id:
-                self.logger.warning(f"Message '{message.id}' in channel '{message.channel_id}' does not have a guild_id!")
+                self.logger.warning(
+                    f"Message '{message.id}' in channel '{message.channel_id}' does not have a guild_id!"
+                )
             else:
                 discord_channels = self.get_channels(message.guild_id)
                 for channel in channels:
                     discord_channel = discord_channels.get(channel)
                     name = (
-                        discord_channel.name if discord_channel else "deleted-channel"
+                        discord_channel.name
+                        if discord_channel
+                        else "deleted-channel"
                     )
                     content = content.replace(f"<#{channel}>", f"#{name}")
 

@@ -341,7 +341,9 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
         if id_as_group:
             snowflake = f"({snowflake})"
 
-        return f"{mention}{self.format}{snowflake}{colon}{re.escape(self.server_name)}"
+        hashed = f"(?:-{snowflake})?"
+
+        return f"{mention}{self.format}{snowflake}{hashed}{colon}{re.escape(self.server_name)}"
 
     def process_message(self, event: matrix.Event) -> str:
         message = event.new_body if event.new_body else event.body
@@ -369,11 +371,15 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
                 "username"
             )
             if username:
-                # Replace the 'mention' so that the user is tagged
-                # in the case of replies aswell.
-                # '> <@_discord_1234:localhost> Message'
-                for replace in (mention.group(0), username):
-                    message = message.replace(replace, f"<@{mention.group(1)}>")
+                if mention.group(2):
+                    # Replace mention with plain text for hashed users (webhooks)
+                    message = message.replace(mention.group(0), f"@{username}")
+                else:
+                    # Replace the 'mention' so that the user is tagged
+                    # in the case of replies aswell.
+                    # '> <@_discord_1234:localhost> Message'
+                    for replace in (mention.group(0), username):
+                        message = message.replace(replace, f"<@{mention.group(1)}>")
 
         # We trim the message later as emotes take up extra characters too.
         return message[: discord.MESSAGE_LIMIT]
@@ -455,9 +461,10 @@ class DiscordClient(Gateway):
             or message.webhook_id in hook_ids
         )
 
-    def matrixify(self, id: str, user: bool = False) -> str:
+    def matrixify(self, id: str, user: bool = False, hashed: str = '') -> str:
         return (
-            f"{'@' if user else '#'}{self.app.format}{id}:"
+            f"{'@' if user else '#'}{self.app.format}"
+            f"{id}{'-' + hashed if hashed else ''}:"
             f"{self.app.server_name}"
         )
 
@@ -489,11 +496,11 @@ class DiscordClient(Gateway):
         Discord user.
         """
 
+        hashed = ''
         if message.webhook_id and not message.application_id:
-            hashed = hash_str(message.author.username)
-            message.author.id = str(int(message.author.id) + hashed)
+            hashed = str(hash_str(message.author.username))
 
-        mxid = self.matrixify(message.author.id, user=True)
+        mxid = self.matrixify(message.author.id, user=True, hashed=hashed)
         room_id = self.app.get_room_id(self.matrixify(message.channel_id))
 
         if not self.app.db.fetch_user(mxid):

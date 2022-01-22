@@ -476,12 +476,12 @@ class DiscordClient(Gateway):
             f"{self.app.server_name}"
         )
 
-    def sync_profile(self, user: discord.User) -> None:
+    def sync_profile(self, user: discord.User, hashed: str = "") -> None:
         """
         Sync the avatar and username for a puppeted user.
         """
 
-        mxid = self.matrixify(user.id, user=True)
+        mxid = self.matrixify(user.id, user=True, hashed=hashed)
 
         profile = self.app.db.fetch_user(mxid)
 
@@ -534,7 +534,7 @@ class DiscordClient(Gateway):
 
         if message.webhook_id:
             # Sync webhooks here as they can't be accessed like guild members.
-            self.sync_profile(message.author)
+            self.sync_profile(message.author, hashed=hashed)
 
         return mxid, room_id
 

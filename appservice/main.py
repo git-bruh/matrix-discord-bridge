@@ -379,53 +379,6 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
 
         return f"{mention}{self.format}{snowflake}{hashed}{colon}{re.escape(self.server_name)}"
 
-    def process_message(self, event: matrix.Event) -> str:
-        message = event.new_body if event.new_body else event.body
-
-        emotes = re.findall(r":(\w*):", message)
-
-        mentions = list(
-            re.finditer(
-                self.mention_regex(encode=False, id_as_group=True),
-                event.formatted_body,
-            )
-        )
-        # For clients that properly encode mentions.
-        # 'https://matrix.to/#/%40_discord_...%3Adomain.tld'
-        mentions.extend(
-            re.finditer(
-                self.mention_regex(encode=True, id_as_group=True),
-                event.formatted_body,
-            )
-        )
-
-        with Cache.lock:
-            for emote in set(emotes):
-                emote_ = Cache.cache["d_emotes"].get(emote)
-                if emote_:
-                    message = message.replace(f":{emote}:", emote_)
-
-        for mention in set(mentions):
-            # Unquote just in-case we matched an encoded username.
-            username = self.db.fetch_user(
-                urllib.parse.unquote(mention.group(0))
-            ).get("username")
-            if username:
-                if mention.group(2):
-                    # Replace mention with plain text for hashed users (webhooks)
-                    message = message.replace(mention.group(0), f"@{username}")
-                else:
-                    # Replace the 'mention' so that the user is tagged
-                    # in the case of replies aswell.
-                    # '> <@_discord_1234:localhost> Message'
-                    for replace in (mention.group(0), username):
-                        message = message.replace(
-                            replace, f"<@{mention.group(1)}>"
-                        )
-
-        # We trim the message later as emotes take up extra characters too.
-        return message[: discord.MESSAGE_LIMIT]
-
     def upload_emote(self, emote_name: str, emote_id: str) -> None:
         # There won't be a race condition here, since only a unique
         # set of emotes are uploaded at a time.

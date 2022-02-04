@@ -6,7 +6,7 @@ import re
 import sys
 import threading
 import urllib.parse
-from typing import Dict, List, Tuple, Union, Optional
+from typing import Dict, List, Tuple, Optional
 
 import markdown
 import urllib3

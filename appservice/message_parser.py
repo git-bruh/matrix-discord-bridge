@@ -1,7 +1,7 @@
 import re
 import logging
 from html.parser import HTMLParser
-from typing import Optional, Tuple, List, Callable
+from typing import Optional, Tuple, List
 
 from db import DataBase
 from cache import Cache

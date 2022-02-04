@@ -1,13 +1,15 @@
 import re
+import logging
 from html.parser import HTMLParser
 from typing import Optional, Tuple, List, Callable
 
 from db import DataBase
 from cache import Cache
 
-htmltomarkdown = {"p": "\n", "strong": "**", "ins": "__", "u": "__", "b": "**", "em": "*", "i": "*", "del": "~~", "strike": "~~", "s": "~~"}
+htmltomarkdown = {"strong": "**", "ins": "__", "u": "__", "b": "**", "em": "*", "i": "*", "del": "~~", "strike": "~~", "s": "~~"}
 headers = {"h1": "***__", "h2": "**__", "h3": "**", "h4": "__", "h5": "*", "h6": ""}
 
+logger = logging.getLogger("message_parser")
 
 def search_attr(attrs: List[Tuple[str, Optional[str]]], searched: str) -> Optional[str]:
     for attr in attrs:
@@ -43,6 +45,7 @@ class MatrixParser(HTMLParser):
         if "mx-reply" in self.c_tags:
             return
         self.c_tags.append(tag)
+
         if tag in htmltomarkdown:
             self.expand_message(htmltomarkdown[tag])
         elif tag == "code":
@@ -64,19 +67,17 @@ class MatrixParser(HTMLParser):
                 self.list_num += 1
             else:
                 self.expand_message("\n• ")
-        elif tag in "br":
-            self.c_tags.pop()
-            self.expand_message("\n")
+        elif tag in ("br", "p"):
+            if not self.message.endswith('\n'):
+                self.expand_message("\n")
             if self.search_for_feature(("blockquote",)):
                 self.expand_message("> ")
-        elif tag == "p":
-            self.expand_message("\n")
         elif tag == "a":
             self.parse_mentions(attrs)
         elif tag == "mx-reply":  # we handle replies separately for best effect
             return
         elif tag == "img":  # TODO At least make it a link to Matrix URL
-            emote_name = search_attr(attrs, "title")
+            emote_name = search_attr(attrs, "title").strip(":")
             emote_ = Cache.cache["d_emotes"].get(emote_name)
             if emote_:
                 self.expand_message(emote_)
@@ -84,9 +85,6 @@ class MatrixParser(HTMLParser):
                 self.expand_message(emote_name)
         elif tag in ("h1", "h2", "h3", "h4", "h5", "h6"):
             self.expand_message(headers[tag])
-        elif tag == "blockquote":
-            self.expand_message("> ")
-        # ignore font tag
 
     def parse_mentions(self, attrs):
         self.current_link = search_attr(attrs, "href")
@@ -108,7 +106,7 @@ class MatrixParser(HTMLParser):
 
     def expand_message(self, expansion: str):
         if len(self.message) + len(expansion) > self.limit:  # TODO Close all tags in c_tags?
-            self.close()
+            raise StopIteration
         self.message += expansion
 
     def is_discord_user(self, target: str) -> bool:
@@ -133,7 +131,11 @@ class MatrixParser(HTMLParser):
             return
         if tag in htmltomarkdown:
             self.expand_message(htmltomarkdown[tag])
-        last_tag = self.c_tags.pop()
+        try:
+            last_tag = self.c_tags.pop()
+        except IndexError:
+            logger.error("tried to pop {} from message tags but list is empty, current message {}".format(tag, self.message))
+            return
         if last_tag == "spoiler":
             self.expand_message("||")
             self.c_tags.pop()  # guaranteed to be a span tag

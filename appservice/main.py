@@ -91,7 +91,7 @@ class MatrixClient(AppService):
         if message.reply and message.reply.get("event_id"):
             replied_to_body: Optional[matrix.Event] = except_deleted(self.get_event)(message.reply["event_id"], message.room_id)
             if replied_to_body and not replied_to_body.redacted_because:
-                return "> " + self.parse_message(replied_to_body, limit=600).replace("\n", "\n> ") + "\n"
+                return "> " + self.parse_message(replied_to_body, limit=600).replace("\n", "\n> ").strip() + "\n"
             else:
                 return "> 🗑️💬\n"  # I really don't want to add translatable strings to this project
         return ""
@@ -168,7 +168,10 @@ class MatrixClient(AppService):
     def parse_message(self, message: matrix.Event, limit: int = discord.MESSAGE_LIMIT):
         if message.formatted_body:
             parser = MatrixParser(self.db, self.mention_regex(False, True), limit=limit)
-            parser.feed(message.formatted_body)
+            try:
+                parser.feed(message.formatted_body)
+            except StopIteration:
+                self.logger.debug("Message has exceeded maximum allowed character limit, processing what we already have")
             message.body = parser.message
         return message.body
 

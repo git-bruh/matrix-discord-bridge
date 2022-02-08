@@ -1,7 +1,7 @@
 import re
 import logging
 from html.parser import HTMLParser
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Callable
 
 from db import DataBase
 from cache import Cache
@@ -76,7 +76,7 @@ class Tags(object):
 
 
 class MatrixParser(HTMLParser):
-    def __init__(self, db: DataBase, mention_regex: str, limit: int = 0):
+    def __init__(self, db: DataBase, mention_regex: str, mxc_img: Callable, limit: int = 0):
         super().__init__()
         self.message: str = ""
         self.current_link: str = ""
@@ -86,6 +86,7 @@ class MatrixParser(HTMLParser):
         self.snowflake_regex: str = mention_regex
         self.limit: int = limit
         self.overflow: bool = False
+        self.mxc_to_img: Callable = mxc_img
 
     def search_for_feature(self, acceptable_features: Tuple[str, ...]) -> Optional[str]:
         """Searches for certain feature in opened HTML tags for given text, if found returns the tag, if not returns None"""
@@ -129,14 +130,23 @@ class MatrixParser(HTMLParser):
             self.parse_mentions(attrs)
         elif tag == "mx-reply":  # we handle replies separately for best effect
             return
-        elif tag == "img":  # TODO At least make it a link to Matrix URL
-            emote_name = search_attr(attrs, "title").strip(":")
-            emote_ = Cache.cache["d_emotes"].get(emote_name)
-            if emote_:
-                self.expand_message(emote_)
+        elif tag == "img":
+            if search_attr(attrs, "data-mx-emoticon") is not None:
+                emote_name = search_attr(attrs, "title")
+                if emote_name is None:
+                    return
+                emote_ = Cache.cache["d_emotes"].get(emote_name.strip(":"))
+                if emote_:
+                    self.expand_message(emote_)
+                else:
+                    self.expand_message(emote_name)
             else:
-                self.expand_message(emote_name)
+                image_link = search_attr(attrs, "src")
+                if image_link and image_link.startswith("mxc://"):
+                    self.expand_message(f"[{search_attr(attrs, 'title') or image_link}]({self.mxc_to_img(image_link)})")
         elif tag in ("h1", "h2", "h3", "h4", "h5", "h6"):
+            if not self.message.endswith('\n'):
+                self.expand_message("\n")
             self.expand_message(headers[tag])
         elif tag == "hr":
             self.expand_message("\n---\n")

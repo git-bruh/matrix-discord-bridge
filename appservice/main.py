@@ -173,7 +173,7 @@ class MatrixClient(AppService):
     def parse_message(self, message: matrix.Event, limit: int = discord.MESSAGE_LIMIT, generate_link: bool = True):
         if message.formatted_body:
             msg_link = self.create_msg_link(message.room_id, message.id) if generate_link else ""
-            parser = MatrixParser(self.db, self.mention_regex(False, True), limit=limit-len(msg_link))
+            parser = MatrixParser(self.db, self.mention_regex(False, True), self.mxc_url, limit=limit-len(msg_link))
             try:
                 parser.feed(message.formatted_body)
             except StopIteration:

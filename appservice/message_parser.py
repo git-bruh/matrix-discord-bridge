@@ -149,7 +149,7 @@ class MatrixParser(HTMLParser):
                 self.expand_message("\n")
             self.expand_message(headers[tag])
         elif tag == "hr":
-            self.expand_message("\n---\n")
+            self.expand_message("\n──────────\n")
             self.tags.pop()
 
     def parse_mentions(self, attrs):

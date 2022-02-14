@@ -18,7 +18,7 @@ from cache import Cache
 from db import DataBase
 from errors import RequestError
 from gateway import Gateway
-from message_parser import MatrixParser
+from message_parser import MatrixParser, escape_markdown
 from misc import dict_cls, except_deleted, hash_str
 
 
@@ -184,6 +184,8 @@ class MatrixClient(AppService):
                     message.body += msg_link
             else:
                 message.body = parser.message
+        else:
+            message.body = escape_markdown(message.body)
         return message.body
 
     def on_redaction(self, event: matrix.Event) -> None:

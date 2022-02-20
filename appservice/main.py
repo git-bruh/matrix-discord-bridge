@@ -88,10 +88,12 @@ class MatrixClient(AppService):
         self.join_room(event.room_id)
 
     def append_replied_to_msg(self, message: matrix.Event) -> str:
+        def escape_urls(message_: str):
+            return re.sub(r"http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+", "<\g<0>>", message_)
         if message.reply and message.reply.get("event_id"):
             replied_to_body: Optional[matrix.Event] = except_deleted(self.get_event)(message.reply["event_id"], message.room_id)
             if replied_to_body and not replied_to_body.redacted_because:
-                return "> " + self.parse_message(replied_to_body, limit=600, generate_link=False).replace("\n", "\n> ").strip() + "\n"
+                return "> " + escape_urls(self.parse_message(replied_to_body, limit=600, generate_link=False).replace("\n", "\n> ").strip()) + "\n"
             else:
                 return "> 🗑️💬\n"  # I really don't want to add translatable strings to this project
         return ""
@@ -185,7 +187,9 @@ class MatrixClient(AppService):
             else:
                 message.body = parser.message
         else:
-            message.body = escape_markdown(message.body)
+            # if we escape : in protocol prefix of a link is going to be plaintext on Discord, we don't want that
+            # but we still have to escape : for emojis so this is a measure for that
+            message.body = escape_markdown(message.body).replace("\\://", "://")
         return message.body
 
     def on_redaction(self, event: matrix.Event) -> None:

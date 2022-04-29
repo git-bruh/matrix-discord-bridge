@@ -89,7 +89,7 @@ class MatrixClient(AppService):
 
     def append_replied_to_msg(self, message: matrix.Event) -> str:
         def escape_urls(message_: str):
-            return re.sub(r"http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+", "<\g<0>>", message_)
+            return re.sub(r"(?<!<)http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+", "<\g<0>>", message_)
         if message.reply and message.reply.get("event_id"):
             replied_to_body: Optional[matrix.Event] = except_deleted(self.get_event)(message.reply["event_id"], message.room_id)
             if replied_to_body and not replied_to_body.redacted_because:

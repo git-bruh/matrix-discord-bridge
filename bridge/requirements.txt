@@ -1,3 +1,2 @@
-aiofiles==0.6.0
-discord.py==1.6.0
-matrix-nio==0.17.0
+discord.py==2.0.1
+matrix-nio==0.19.0

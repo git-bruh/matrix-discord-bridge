@@ -56,7 +56,7 @@ class MatrixClient(nio.AsyncClient):
 
     def start_discord(self):
         # Intents to fetch members from guild.
-        intents = discord.Intents.default()
+        intents = discord.Intents.all()
         intents.members = True
 
         self.discord_client = DiscordClient(
@@ -265,6 +265,9 @@ class DiscordClient(discord.ext.commands.Bot):
     async def on_ready(self):
         for channel in config["bridge"].keys():
             channel_ = self.get_channel(int(channel))
+            if not channel_:
+                self.matrix_client.logger.warning(f"Failed to get channel for ID {channel}")
+                continue
             self.channel_store[channel] = channel_
 
         self.ready.set()
@@ -391,6 +394,9 @@ class Callbacks(object):
         # Get the corresponding Discord channel.
         channel_id = self.get_channel(room)
 
+        if not channel_id:
+            return
+
         author = room.user_name(event.sender)
         avatar = None
 
@@ -498,6 +504,9 @@ class Callbacks(object):
 
         # Get the corresponding Discord channel.
         channel_id = self.get_channel(room)
+
+        if not channel_id:
+            return
 
         # Send typing event.
         async with self.discord_client.channel_store[channel_id].typing():

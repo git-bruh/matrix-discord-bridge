@@ -6,7 +6,7 @@ This repository contains two bridges:
 
 * A [puppeting appservice](appservice): The puppeting bridge written with minimal dependencies. Running this requires a self-hosted homeserver.
 
-* A [non-puppeting bridge](bridge): The non-puppeting plaintext bridge written with `matrix-nio` and `discord.py`, most people would want to use this one if running on heroku or similar and don't have their own server.
+* A [non-puppeting bridge](bridge): The non-puppeting plaintext bridge written with `matrix-nio` and `discord.py`, most people would want to use this one if running on heroku or similar and don't have their own server. **NOTE:** This is unmaintained and might break in the future due to Discord changes.
 
 Check their READMEs for specific information.
 

@@ -218,7 +218,7 @@ class MatrixClient(AppService):
 
         fmt = self.get_fmt(message, emotes)
 
-        if len(fmt) != len(message):
+        if fmt != message:
             content = {
                 **content,
                 "format": "org.matrix.custom.html",
@@ -261,7 +261,13 @@ class MatrixClient(AppService):
 
                 event.body = tmp
                 event.formatted_body = (
-                    re.sub("<mx-reply>.*</mx-reply>", "", event.formatted_body)
+                    # re.DOTALL allows the match to span newlines.
+                    re.sub(
+                        "<mx-reply.+?</mx-reply>",
+                        "",
+                        event.formatted_body,
+                        flags=re.DOTALL,
+                    )
                     if event.formatted_body
                     else event.body
                 )
@@ -274,10 +280,9 @@ class MatrixClient(AppService):
                     "m.relates_to": {"m.in_reply_to": {"event_id": event.id}},
                     "format": "org.matrix.custom.html",
                     "formatted_body": f"""<mx-reply><blockquote>\
-<a href="https://matrix.to/#/{event.room_id}/{event.id}">\
-In reply to</a><a href="https://matrix.to/#/{event.sender}">\
-{event.sender}</a><br>\
-{event.formatted_body if event.formatted_body else event.body}\
+<a href="https://matrix.to/#/{event.room_id}/{event.id}">In reply to</a>\
+<a href="https://matrix.to/#/{event.sender}">{event.sender}</a>\
+<br />{event.formatted_body if event.formatted_body else event.body}\
 </blockquote></mx-reply>\
 {content.get("formatted_body", content['body'])}""",
                 }
@@ -295,7 +300,10 @@ In reply to</a><a href="https://matrix.to/#/{event.sender}">\
 
     def get_fmt(self, message: str, emotes: dict) -> str:
         message = (
-            markdown.markdown(message).replace("<p>", "").replace("</p>", "")
+            markdown.markdown(message)
+            .replace("<p>", "")
+            .replace("</p>", "")
+            .replace("\n", "<br />")
         )
 
         # Upload emotes in multiple threads so that we don't

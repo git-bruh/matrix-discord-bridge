@@ -6,7 +6,7 @@ import re
 import sys
 import threading
 import urllib.parse
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 import markdown
 import urllib3
@@ -18,6 +18,7 @@ from cache import Cache
 from db import DataBase
 from errors import RequestError
 from gateway import Gateway
+from message_parser import MatrixParser, escape_markdown
 from misc import dict_cls, except_deleted, hash_str
 
 
@@ -86,6 +87,17 @@ class MatrixClient(AppService):
         self.logger.info(f"Joining direct message room '{event.room_id}'.")
         self.join_room(event.room_id)
 
+    def append_replied_to_msg(self, message: matrix.Event) -> str:
+        def escape_urls(message_: str):
+            return re.sub(r"(?<!<)http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+", "<\g<0>>", message_)
+        if message.reply and message.reply.get("event_id"):
+            replied_to_body: Optional[matrix.Event] = except_deleted(self.get_event)(message.reply["event_id"], message.room_id)
+            if replied_to_body and not replied_to_body.redacted_because:
+                return "> " + escape_urls(self.parse_message(replied_to_body, limit=600, generate_link=False).replace("\n", "\n> ").strip()) + "\n"
+            else:
+                return "> 🗑️💬\n"  # I really don't want to add translatable strings to this project
+        return ""
+
     def on_message(self, message: matrix.Event) -> None:
         if (
             message.sender.startswith((f"@{self.format}", self.user_id))
@@ -107,36 +119,78 @@ class MatrixClient(AppService):
             channel_id, self.discord.webhook_name
         )
 
+        # Let's take a few scenarios that can happen. We should handle at least 2 special message cases: replies and edits
+        # Replies should ask for replied to message event, parse that event, limit output to maybe like 500 characters
+        # and prepend it to main message in form of a quote, we can't just use Discord's reply because Discord being dumb
+        # https://github.com/discord/discord-api-docs/discussions/3282
+        # Edits should look at previously edited message, if it was a reply they need to handle all that reply logic again
+        # However edits lose replied to field so we have to fetch original message (wooho?) and get it from that instead
+
+        content = ""
+
         if message.relates_to and message.reltype == "m.replace":
             with Cache.lock:
                 message_id = Cache.cache["m_messages"].get(message.relates_to)
 
-            # TODO validate if the original author sent the edit.
+            original_message: Optional[matrix.Event] = except_deleted(self.get_event)(message.relates_to, message.room_id)
 
             if not message_id or not message.new_body:
                 return
 
-            message.new_body = self.process_message(message)
+            if original_message:
+                if message.sender != original_message.sender:
+                    return
+                content += self.append_replied_to_msg(original_message)
+            # If new body has formatted form, use that
+            message.body = message.new_body.get("body", "")
+            message.formatted_body = message.new_body.get("formatted_body", "")
+            content += self.parse_message(message)
 
             except_deleted(self.discord.edit_webhook)(
-                message.new_body, message_id, webhook
+                content[:discord.MESSAGE_LIMIT], message_id, webhook
             )
         else:
-            message.body = (
+            content += self.append_replied_to_msg(message)
+            content += (
                 f"`{message.body}`: {self.mxc_url(message.attachment)}"
                 if message.attachment
-                else self.process_message(message)
+                else self.parse_message(message)
             )
-
+            if not content or content.isspace():
+                return
             message_id = self.discord.send_webhook(
                 webhook,
                 self.mxc_url(author.avatar_url) if author.avatar_url else None,
-                message.body,
+                content[:discord.MESSAGE_LIMIT],
                 author.display_name if author.display_name else message.sender,
             ).id
 
             with Cache.lock:
                 Cache.cache["m_messages"][message.id] = message_id
+
+    @staticmethod
+    def create_msg_link(room_id: str, event: str) -> str:
+        return f"[[…]](<https://matrix.to/#/{room_id}/{event}>)"
+
+    def parse_message(self, message: matrix.Event, limit: int = discord.MESSAGE_LIMIT, generate_link: bool = True):
+        if message.formatted_body:
+            msg_link = self.create_msg_link(message.room_id, message.id) if generate_link else ""
+            parser = MatrixParser(self.db, self.mention_regex(False, True), self.mxc_url, limit=limit-len(msg_link))
+            try:
+                parser.feed(message.formatted_body)
+            except StopIteration:
+                self.logger.debug("Message has exceeded maximum allowed character limit, processing what we already have")
+                message.body = parser.message
+                # Create a link to message for Discord side to spread the word about Matrix superior character limit
+                if generate_link:
+                    message.body += msg_link
+            else:
+                message.body = parser.message
+        else:
+            # if we escape : in protocol prefix of a link is going to be plaintext on Discord, we don't want that
+            # but we still have to escape : for emojis so this is a measure for that
+            message.body = escape_markdown(message.body).replace("\\://", "://")
+        return message.body
 
     def on_redaction(self, event: matrix.Event) -> None:
         with Cache.lock:
@@ -352,53 +406,6 @@ height=\"32\" src=\"{emote_}\" data-mx-emoticon />""",
         hashed = f"(?:-{snowflake})?"
 
         return f"{mention}{self.format}{snowflake}{hashed}{colon}{re.escape(self.server_name)}"
-
-    def process_message(self, event: matrix.Event) -> str:
-        message = event.new_body if event.new_body else event.body
-
-        emotes = re.findall(r":(\w*):", message)
-
-        mentions = list(
-            re.finditer(
-                self.mention_regex(encode=False, id_as_group=True),
-                event.formatted_body,
-            )
-        )
-        # For clients that properly encode mentions.
-        # 'https://matrix.to/#/%40_discord_...%3Adomain.tld'
-        mentions.extend(
-            re.finditer(
-                self.mention_regex(encode=True, id_as_group=True),
-                event.formatted_body,
-            )
-        )
-
-        with Cache.lock:
-            for emote in set(emotes):
-                emote_ = Cache.cache["d_emotes"].get(emote)
-                if emote_:
-                    message = message.replace(f":{emote}:", emote_)
-
-        for mention in set(mentions):
-            # Unquote just in-case we matched an encoded username.
-            username = self.db.fetch_user(
-                urllib.parse.unquote(mention.group(0))
-            ).get("username")
-            if username:
-                if mention.group(2):
-                    # Replace mention with plain text for hashed users (webhooks)
-                    message = message.replace(mention.group(0), f"@{username}")
-                else:
-                    # Replace the 'mention' so that the user is tagged
-                    # in the case of replies aswell.
-                    # '> <@_discord_1234:localhost> Message'
-                    for replace in (mention.group(0), username):
-                        message = message.replace(
-                            replace, f"<@{mention.group(1)}>"
-                        )
-
-        # We trim the message later as emotes take up extra characters too.
-        return message[: discord.MESSAGE_LIMIT]
 
     def upload_emote(self, emote_name: str, emote_id: str) -> None:
         # There won't be a race condition here, since only a unique
